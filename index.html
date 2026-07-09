@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gestion des Dossiers RH</title>
+
+  <!-- Icônes -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Google+Sans:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+
+  <!-- Chart.js pour les graphiques du tableau de bord -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ============================== HEADER ============================== -->
+  <header class="app-header">
+    <div class="app-header__brand">
+      <i class="fa-solid fa-folder-open"></i>
+      <span>Gestion des Dossiers RH</span>
+    </div>
+    <nav class="app-header__nav">
+      <button class="nav-btn active" data-view="dashboard-view">
+        <i class="fa-solid fa-chart-pie"></i> Tableau de bord
+      </button>
+      <button class="nav-btn" data-view="search-view">
+        <i class="fa-solid fa-magnifying-glass"></i> Collaborateurs
+      </button>
+    </nav>
+  </header>
+
+  <!-- ============================== LOADER ============================== -->
+  <div id="loader" class="loader-overlay hidden">
+    <div class="loader-spinner"></div>
+    <p>Chargement en cours...</p>
+  </div>
+
+  <!-- ============================== TOASTS ============================== -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <main class="app-main">
+
+    <!-- ========================== VUE : DASHBOARD ========================== -->
+    <section id="dashboard-view" class="view active">
+      <h1 class="view-title">Tableau de bord</h1>
+
+      <div class="stats-grid" id="stats-grid">
+        <!-- Cartes statistiques générées dynamiquement par script.js -->
+      </div>
+
+      <div class="charts-grid">
+        <div class="card chart-card">
+          <h2><i class="fa-solid fa-circle-check"></i> Dossiers complets / incomplets</h2>
+          <div class="chart-wrapper">
+            <canvas id="chart-completeness"></canvas>
+          </div>
+        </div>
+        <div class="card chart-card">
+          <h2><i class="fa-solid fa-triangle-exclamation"></i> Documents les plus souvent manquants</h2>
+          <div class="chart-wrapper">
+            <canvas id="chart-missing-docs"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================== VUE : RECHERCHE ========================== -->
+    <section id="search-view" class="view">
+      <h1 class="view-title">Recherche collaborateur</h1>
+
+      <div class="search-bar card">
+        <div class="search-field">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input type="text" id="search-input" placeholder="Rechercher par matricule ou par nom..." />
+        </div>
+        <button id="search-clear" class="btn btn-text">
+          <i class="fa-solid fa-xmark"></i> Effacer
+        </button>
+      </div>
+
+      <div class="table-responsive card">
+        <table class="employees-table">
+          <thead>
+            <tr>
+              <th>Matricule</th>
+              <th>Nom et Prénoms</th>
+              <th>Fonction</th>
+              <th>Rattachement</th>
+              <th>Scan</th>
+              <th>Inventaire</th>
+              <th>Complétude</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="employees-table-body">
+            <!-- Lignes générées dynamiquement par script.js -->
+          </tbody>
+        </table>
+        <p id="no-results" class="no-results hidden">Aucun collaborateur trouvé.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ====================== MODALE : FICHE COLLABORATEUR ====================== -->
+  <div id="employee-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal__header">
+        <div>
+          <h2 id="modal-employee-name">—</h2>
+          <p id="modal-employee-sub" class="modal__sub">—</p>
+        </div>
+        <button id="modal-close" class="btn-icon" aria-label="Fermer">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="modal__body">
+
+        <!-- Infos générales -->
+        <div class="info-grid" id="modal-info-grid">
+          <!-- Généré dynamiquement -->
+        </div>
+
+        <!-- Alerte complétude globale -->
+        <div id="modal-completeness-alert" class="completeness-alert">
+          <!-- Généré dynamiquement -->
+        </div>
+
+        <!-- Bloc SCAN -->
+        <div class="section-block">
+          <h3><i class="fa-solid fa-scanner"></i> Scan du dossier</h3>
+          <div class="scan-controls">
+            <label class="switch">
+              <input type="checkbox" id="scan-checkbox" />
+              <span class="switch__slider"></span>
+            </label>
+            <span id="scan-status-label">Non scanné</span>
+          </div>
+          <textarea id="scan-comment" placeholder="Commentaire scan (optionnel)"></textarea>
+          <button id="scan-save-btn" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk"></i> Enregistrer le scan
+          </button>
+          <p class="field-meta" id="scan-date-meta"></p>
+        </div>
+
+        <!-- Bloc INVENTAIRE -->
+        <div class="section-block">
+          <h3><i class="fa-solid fa-boxes-stacked"></i> Inventaire physique</h3>
+          <div class="scan-controls">
+            <label class="switch">
+              <input type="checkbox" id="inventory-checkbox" />
+              <span class="switch__slider"></span>
+            </label>
+            <span id="inventory-status-label">Non réalisé</span>
+          </div>
+        </div>
+
+        <!-- Bloc DOCUMENTS -->
+        <div class="section-block">
+          <h3><i class="fa-solid fa-file-lines"></i> Documents du dossier</h3>
+          <div class="documents-list" id="documents-list">
+            <!-- Généré dynamiquement -->
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
