@@ -208,6 +208,48 @@ body {
   margin-bottom: 18px;
 }
 
+/* ============================== FILTRES ============================== */
+.filters {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.filter-item { display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; color: var(--color-text); }
+.filter-item select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: white;
+  min-width: 160px;
+}
+
+/* ============================== RATTACHEMENT BADGE (flou) ============================== */
+.rattachement-badge {
+  position: relative;
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #fff;
+  font-weight: 600;
+  z-index: 1;
+  /* variable set inline: --badge-color (rgba) */
+}
+.rattachement-badge::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--badge-color, rgba(13,148,136,0.85));
+  filter: blur(6px);
+  opacity: 0.9;
+  z-index: -1;
+}
+.rattachement-badge[data-contrast="dark"] { color: #fff; }
+.rattachement-badge[data-contrast="light"] { color: #111827; }
+
 .search-field {
   flex: 1;
   display: flex;

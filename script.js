@@ -223,6 +223,9 @@ async function loadEmployees() {
   try {
     state.employees = await apiGet('getEmployees');
     state.filteredEmployees = state.employees;
+    // remplir les options de filtre puis initialiser les événements de filtre
+    populateFilterOptions(state.employees);
+    initFilters();
     renderEmployeesTable(state.filteredEmployees);
   } catch (err) {
     showToast(err.message, 'error');
@@ -256,12 +259,16 @@ function renderEmployeesTable(list) {
       ? `<span class="badge complete"><span class="badge-dot"></span>OK</span>`
       : `<span class="badge na"><span class="badge-dot"></span>—</span>`;
 
+    // couleur unique basée sur le nom du rattachement
+    const color = colorFromString(emp.rattachement || '');
+    const contrast = getContrastYIQ(color) === 'dark' ? 'light' : 'dark';
+
     return `
       <tr data-matricule="${escapeHtml(emp.matricule)}">
         <td>${escapeHtml(emp.matricule)}</td>
         <td>${escapeHtml(emp.nomPrenoms)}</td>
         <td>${escapeHtml(emp.fonction)}</td>
-        <td>${escapeHtml(emp.rattachement)}</td>
+        <td><span class="rattachement-badge" style="--badge-color: ${color};" data-contrast="${contrast}">${escapeHtml(emp.rattachement)}</span></td>
         <td>${scanBadge}</td>
         <td>${inventoryBadge}</td>
         <td>${completBadge}</td>
@@ -279,20 +286,88 @@ function initSearch() {
   const input = document.getElementById('search-input');
   const clearBtn = document.getElementById('search-clear');
 
-  input.addEventListener('input', () => {
-    const term = input.value.trim().toLowerCase();
-    state.filteredEmployees = state.employees.filter(emp =>
-      String(emp.matricule).toLowerCase().includes(term) ||
-      String(emp.nomPrenoms).toLowerCase().includes(term)
-    );
-    renderEmployeesTable(state.filteredEmployees);
-  });
+  input.addEventListener('input', () => applyFilters());
 
   clearBtn.addEventListener('click', () => {
     input.value = '';
+    // reset filters UI
+    document.getElementById('filter-fonction').value = '';
+    document.getElementById('filter-rattachement').value = '';
+    document.getElementById('filter-inventaire').value = '';
+    document.getElementById('filter-scan').value = '';
     state.filteredEmployees = state.employees;
     renderEmployeesTable(state.filteredEmployees);
   });
+}
+
+// ============================================================================
+// FILTRES & COULEURS
+// ============================================================================
+
+/** Retourne une couleur rgba basée sur une chaîne (hash simple) */
+function colorFromString(str) {
+  const palette = [
+    '13,148,136', '14,165,233', '251,113,133', '168,85,247', '245,158,11', '34,197,94'
+  ];
+  if (!str) return 'rgba(13,148,136,0.9)';
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h << 5) - h + str.charCodeAt(i);
+  const idx = Math.abs(h) % palette.length;
+  return `rgba(${palette[idx]},0.92)`;
+}
+
+/** Estime si la couleur est claire ou foncée (pour le contraste du texte) */
+function getContrastYIQ(rgba) {
+  // rgba format: 'rgba(r,g,b,a)'
+  const m = rgba.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+  if (!m) return 'dark';
+  const r = parseInt(m[1], 10), g = parseInt(m[2], 10), b = parseInt(m[3], 10);
+  const yiq = (r*299 + g*587 + b*114) / 1000;
+  return (yiq >= 128) ? 'light' : 'dark';
+}
+
+/** Remplit les options des selects de filtre avec les valeurs uniques */
+function populateFilterOptions(list) {
+  const fonctions = Array.from(new Set(list.map(e => e.fonction || '').filter(Boolean))).sort();
+  const rattachements = Array.from(new Set(list.map(e => e.rattachement || '').filter(Boolean))).sort();
+
+  const fSel = document.getElementById('filter-fonction');
+  const rSel = document.getElementById('filter-rattachement');
+
+  // vider puis ajouter
+  fSel.innerHTML = '<option value="">Toutes les fonctions</option>' + fonctions.map(f => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join('');
+  rSel.innerHTML = '<option value="">Tous les rattachements</option>' + rattachements.map(r => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('');
+}
+
+function initFilters() {
+  ['filter-fonction','filter-rattachement','filter-inventaire','filter-scan'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => applyFilters());
+  });
+}
+
+/** Applique les filtres et la recherche sur la liste d'employés */
+function applyFilters() {
+  const term = (document.getElementById('search-input').value || '').trim().toLowerCase();
+  const f = document.getElementById('filter-fonction').value;
+  const r = document.getElementById('filter-rattachement').value;
+  const inv = document.getElementById('filter-inventaire').value; // 'realise' / 'non_realise' / ''
+  const sc = document.getElementById('filter-scan').value; // 'realise' / 'non_realise' / ''
+
+  state.filteredEmployees = state.employees.filter(emp => {
+    if (term) {
+      const ok = String(emp.matricule).toLowerCase().includes(term) || String(emp.nomPrenoms).toLowerCase().includes(term);
+      if (!ok) return false;
+    }
+    if (f && String(emp.fonction || '') !== f) return false;
+    if (r && String(emp.rattachement || '') !== r) return false;
+    if (inv === 'realise' && String(emp.inventaire).toUpperCase() !== 'OK') return false;
+    if (inv === 'non_realise' && String(emp.inventaire).toUpperCase() === 'OK') return false;
+    if (sc === 'realise' && !emp.scan) return false;
+    if (sc === 'non_realise' && emp.scan) return false;
+    return true;
+  });
+  renderEmployeesTable(state.filteredEmployees);
 }
 
 // ============================================================================

@@ -82,6 +82,41 @@
         </button>
       </div>
 
+      <!-- FILTRES -->
+      <div class="filters card">
+        <label class="filter-item">
+          <span>Fonction</span>
+          <select id="filter-fonction">
+            <option value="">Toutes les fonctions</option>
+          </select>
+        </label>
+
+        <label class="filter-item">
+          <span>Rattachement</span>
+          <select id="filter-rattachement">
+            <option value="">Tous les rattachements</option>
+          </select>
+        </label>
+
+        <label class="filter-item">
+          <span>Inventaire</span>
+          <select id="filter-inventaire">
+            <option value="">Tous</option>
+            <option value="realise">Réalisé</option>
+            <option value="non_realise">Non réalisé</option>
+          </select>
+        </label>
+
+        <label class="filter-item">
+          <span>Scan</span>
+          <select id="filter-scan">
+            <option value="">Tous</option>
+            <option value="realise">Scanné</option>
+            <option value="non_realise">Non scanné</option>
+          </select>
+        </label>
+      </div>
+
       <div class="table-responsive card">
         <table class="employees-table">
           <thead>
