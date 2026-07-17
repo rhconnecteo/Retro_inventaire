@@ -9,7 +9,7 @@
 // ============================================================================
 
 // URL de déploiement du Web App Apps Script (voir README.md pour l'obtenir)
-const API_URL = 'https://script.google.com/macros/s/AKfycbxl17hh-fRNHB0d0zTJJqIAFLfit0-sjENykiPKzVHEUip2ox6nT6BklLARu-5B8ahq/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbzYOmJz7-zSF9husNYEVKJg3ZBksFttk4vsq7AtUYWEhVNLtwWroST52A8N5_mdwYfT/exec';
 
 // Libellés et icônes de statut, utilisés partout dans l'UI
 const STATUS_META = {
@@ -24,7 +24,8 @@ const STATUS_META = {
 const state = {
   employees: [],       // liste résumée (vue recherche)
   filteredEmployees: [],
-  currentEmployee: null // fiche détaillée actuellement ouverte dans la modale
+  currentEmployee: null, // fiche détaillée actuellement ouverte dans la modale
+  pendingDocumentUpdates: {}
 };
 
 // ============================================================================
@@ -67,10 +68,53 @@ async function apiPost(action, payload = {}) {
 // ============================================================================
 
 function showLoader() {
-  document.getElementById('loader').classList.remove('hidden');
+  const loader = document.getElementById('loader');
+  if (loader) loader.classList.remove('hidden');
 }
 function hideLoader() {
-  document.getElementById('loader').classList.add('hidden');
+  const loader = document.getElementById('loader');
+  if (loader) loader.classList.add('hidden');
+}
+
+function setButtonLoading(buttonId, isLoading, label = 'Enregistrement...') {
+  const button = document.getElementById(buttonId);
+  if (!button) return;
+
+  if (isLoading) {
+    if (!button.dataset.originalHtml) {
+      button.dataset.originalHtml = button.innerHTML;
+    }
+    button.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${label}`;
+    button.disabled = true;
+    return;
+  }
+
+  if (button.dataset.originalHtml) {
+    button.innerHTML = button.dataset.originalHtml;
+    delete button.dataset.originalHtml;
+  }
+  button.disabled = false;
+}
+
+function setModalBusy(isBusy) {
+  const modal = document.getElementById('employee-modal');
+  if (!modal) return;
+
+  modal.classList.toggle('is-busy', isBusy);
+  modal.querySelectorAll('button, input, textarea, select').forEach(control => {
+    if (isBusy) {
+      if (control.dataset.busyPrevDisabled === undefined) {
+        control.dataset.busyPrevDisabled = control.disabled ? '1' : '0';
+      }
+      control.disabled = true;
+      return;
+    }
+
+    if (control.dataset.busyPrevDisabled !== undefined) {
+      control.disabled = control.dataset.busyPrevDisabled === '1';
+      delete control.dataset.busyPrevDisabled;
+    }
+  });
 }
 
 /**
@@ -128,30 +172,33 @@ function initNavigation() {
 
 let completenessChart = null;
 let missingDocsChart = null;
+let polesChart = null;
+let dashboardRefreshTimer = null;
+let employeesRefreshTimer = null;
+let lastDashboardLoad = 0;
+let lastEmployeesLoad = 0;
 
 async function loadDashboard() {
-  showLoader();
+  lastDashboardLoad = Date.now();
   try {
     const data = await apiGet('getDashboard');
     renderStatsCards(data);
-    renderCompletenessChart(data);
+    renderPoleCards(data);
+    renderPoleChart(data);
     renderMissingDocsChart(data);
   } catch (err) {
     showToast(err.message, 'error');
-  } finally {
-    hideLoader();
-  }
+  } finally {}
 }
 
 function renderStatsCards(data) {
   const grid = document.getElementById('stats-grid');
   const cards = [
     { icon: 'fa-users', label: 'Collaborateurs', value: data.totalEmployees, cls: '' },
-    { icon: 'fa-circle-check', label: 'Dossiers complets', value: data.complete, cls: 'success' },
-    { icon: 'fa-triangle-exclamation', label: 'Dossiers incomplets', value: data.incomplete, cls: 'danger' },
-    { icon: 'fa-scanner', label: 'Scans réalisés', value: data.scansDone, cls: 'accent' },
-    { icon: 'fa-boxes-stacked', label: 'Inventaires réalisés', value: data.inventoriesDone, cls: 'accent' },
-    { icon: 'fa-percent', label: 'Taux de complétude', value: data.completionPercentage + ' %', cls: 'warning' }
+    { icon: 'fa-percent', label: 'Taux global de complétude', value: data.completionPercentage + ' %', cls: 'warning' },
+    { icon: 'fa-scanner', label: 'Scans 1 réalisés', value: data.scansDone, cls: 'accent' },
+    { icon: 'fa-barcode', label: 'Scans 2 réalisés', value: data.scans2Done, cls: 'accent' },
+    { icon: 'fa-boxes-stacked', label: 'Inventaires réalisés', value: data.inventoriesDone, cls: 'success' }
   ];
 
   grid.innerHTML = cards.map(c => `
@@ -165,23 +212,57 @@ function renderStatsCards(data) {
   `).join('');
 }
 
-function renderCompletenessChart(data) {
-  const ctx = document.getElementById('chart-completeness').getContext('2d');
-  if (completenessChart) completenessChart.destroy();
+function renderPoleCards(data) {
+  const grid = document.getElementById('poles-grid');
+  const poles = data.poles || [];
 
-  completenessChart = new Chart(ctx, {
-    type: 'doughnut',
+  if (!grid) return;
+  if (!poles.length) {
+    grid.innerHTML = '<div class="pole-empty">Aucune donnée de pôle disponible.</div>';
+    return;
+  }
+
+  grid.innerHTML = poles.map(pole => `
+    <div class="pole-card">
+      <div class="pole-card__head">
+        <div>
+          <div class="pole-card__title">${escapeHtml(pole.pole)}</div>
+          <div class="pole-card__sub">${escapeHtml(pole.totalEmployees)} collaborateur(s)</div>
+        </div>
+      </div>
+      <div class="pole-metrics">
+        <div class="pole-metric"><span>Complétude</span><strong>${escapeHtml(pole.completionRate)}%</strong></div>
+        <div class="pole-metric"><span>Scan 1</span><strong>${escapeHtml(pole.scan1Rate)}%</strong></div>
+        <div class="pole-metric"><span>Scan 2</span><strong>${escapeHtml(pole.scan2Rate)}%</strong></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderPoleChart(data) {
+  const canvas = document.getElementById('chart-poles');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (polesChart) polesChart.destroy();
+
+  const poles = data.poles || [];
+  polesChart = new Chart(ctx, {
+    type: 'bar',
     data: {
-      labels: ['Complets', 'Incomplets'],
-      datasets: [{
-        data: [data.complete, data.incomplete],
-        backgroundColor: ['#16A34A', '#DC2626'],
-        borderWidth: 0
-      }]
+      labels: poles.map(p => p.pole),
+      datasets: [
+        { label: 'Complétude', data: poles.map(p => p.completionRate), backgroundColor: '#0D9488', borderRadius: 8 },
+        { label: 'Scan 1', data: poles.map(p => p.scan1Rate), backgroundColor: '#0EA5E9', borderRadius: 8 },
+        { label: 'Scan 2', data: poles.map(p => p.scan2Rate), backgroundColor: '#16A34A', borderRadius: 8 }
+      ]
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      scales: {
+        y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
+        x: { ticks: { maxRotation: 0, minRotation: 0 } }
+      },
       plugins: { legend: { position: 'bottom' } }
     }
   });
@@ -219,7 +300,7 @@ function renderMissingDocsChart(data) {
 // ============================================================================
 
 async function loadEmployees() {
-  showLoader();
+  lastEmployeesLoad = Date.now();
   try {
     state.employees = await apiGet('getEmployees');
     state.filteredEmployees = state.employees;
@@ -229,9 +310,7 @@ async function loadEmployees() {
     renderEmployeesTable(state.filteredEmployees);
   } catch (err) {
     showToast(err.message, 'error');
-  } finally {
-    hideLoader();
-  }
+  } finally {}
 }
 
 function renderEmployeesTable(list) {
@@ -246,8 +325,11 @@ function renderEmployeesTable(list) {
   noResults.classList.add('hidden');
 
   tbody.innerHTML = list.map(emp => {
+    const canEvaluate = emp.scan === true;
     const isComplete = emp.completude === 'COMPLET';
-    const completBadge = isComplete
+    const completBadge = !canEvaluate
+      ? `<span class="badge na"><span class="badge-dot"></span>Scan 1 à faire</span>`
+      : isComplete
       ? `<span class="badge complete"><span class="badge-dot"></span>Complet</span>`
       : `<span class="badge incorrect"><span class="badge-dot"></span>Incomplet</span>`;
 
@@ -370,6 +452,35 @@ function applyFilters() {
   renderEmployeesTable(state.filteredEmployees);
 }
 
+function scheduleDashboardRefresh(delay = 250) {
+  if (dashboardRefreshTimer) clearTimeout(dashboardRefreshTimer);
+  dashboardRefreshTimer = setTimeout(() => {
+    if (document.getElementById('dashboard-view').classList.contains('active')) {
+      loadDashboard();
+    }
+  }, delay);
+}
+
+function scheduleEmployeesRefresh(delay = 250) {
+  if (employeesRefreshTimer) clearTimeout(employeesRefreshTimer);
+  employeesRefreshTimer = setTimeout(() => {
+    if (document.getElementById('search-view').classList.contains('active')) {
+      loadEmployees();
+    }
+  }, delay);
+}
+
+function refreshVisibleData() {
+  if (document.visibilityState !== 'visible') return;
+  const now = Date.now();
+  if (document.getElementById('dashboard-view').classList.contains('active') && now - lastDashboardLoad > 5000) {
+    loadDashboard();
+  }
+  if (document.getElementById('search-view').classList.contains('active') && now - lastEmployeesLoad > 5000) {
+    loadEmployees();
+  }
+}
+
 // ============================================================================
 // 7. MODALE — FICHE COLLABORATEUR
 // ============================================================================
@@ -391,9 +502,13 @@ async function openEmployeeModal(matricule) {
 function closeEmployeeModal() {
   document.getElementById('employee-modal').classList.add('hidden');
   state.currentEmployee = null;
+  state.pendingDocumentUpdates = {};
 }
 
 function renderEmployeeModal(emp) {
+  state.pendingDocumentUpdates = {};
+  const canEvaluate = emp.scan === true;
+  const showSelectionControls = canEvaluate && emp.completude !== 'COMPLET';
   document.getElementById('modal-employee-name').textContent = emp.nomPrenoms || '—';
   document.getElementById('modal-employee-sub').textContent =
     `Matricule ${emp.matricule} · ${emp.fonction || '—'}`;
@@ -413,12 +528,22 @@ function renderEmployeeModal(emp) {
   `).join('');
 
   // Alerte de complétude (carte "Annulé"-style bien visible)
-  const isComplete = emp.completude === 'COMPLET';
   const alertEl = document.getElementById('modal-completeness-alert');
-  alertEl.className = `completeness-alert ${isComplete ? 'complete' : 'incomplete'}`;
-  alertEl.innerHTML = isComplete
-    ? `<i class="fa-solid fa-circle-check"></i> <div>Dossier <strong>COMPLET</strong> — tous les documents requis sont fournis.</div>`
-    : `<i class="fa-solid fa-triangle-exclamation"></i> <div>Dossier <strong>INCOMPLET</strong> — ${emp.missingDocuments.length} document(s) à régulariser.</div>`;
+  if (!canEvaluate) {
+    alertEl.className = 'completeness-alert pending';
+    alertEl.innerHTML = `<i class="fa-solid fa-hourglass-half"></i><div><div>Dossier <strong>EN ATTENTE</strong> — lancez d'abord le <strong>Scan 1</strong> pour calculer la complétude.</div></div>`;
+  } else {
+    const isComplete = emp.completude === 'COMPLET';
+    const missingList = emp.missingDocuments.length
+      ? `<ul class="completeness-alert__list">${emp.missingDocuments.map(doc => `<li>${escapeHtml(doc.label)}</li>`).join('')}</ul>`
+      : '';
+    alertEl.className = `completeness-alert ${isComplete ? 'complete' : 'incomplete'}`;
+    alertEl.innerHTML = isComplete
+      ? `<i class="fa-solid fa-circle-check"></i><div><div>Dossier <strong>COMPLET</strong> — aucun document à régulariser.</div>${missingList}</div>`
+      : `<i class="fa-solid fa-triangle-exclamation"></i><div><div>Dossier <strong>INCOMPLET</strong> — ${emp.missingDocuments.length} document(s) à régulariser.</div>${missingList}</div>`;
+  }
+
+  document.getElementById('document-validation-comment').value = emp.commentaireCompletude || '';
 
   // Bloc SCAN
   const scanCheckbox = document.getElementById('scan-checkbox');
@@ -428,6 +553,13 @@ function renderEmployeeModal(emp) {
   document.getElementById('scan-date-meta').textContent = emp.dateScan
     ? `Dernière mise à jour : ${emp.dateScan}` : '';
 
+  const scan2Checkbox = document.getElementById('scan2-checkbox');
+  scan2Checkbox.checked = emp.scan2 === true;
+  document.getElementById('scan2-status-label').textContent = emp.scan2 ? 'Scanné 2' : 'Non scanné 2';
+  document.getElementById('scan2-comment').value = emp.commentaireScan2 || '';
+  document.getElementById('scan2-date-meta').textContent = emp.dateScan2
+    ? `Dernière mise à jour : ${emp.dateScan2}` : '';
+
   // Bloc INVENTAIRE
   const inventoryCheckbox = document.getElementById('inventory-checkbox');
   inventoryCheckbox.checked = String(emp.inventaire).toUpperCase() === 'OK';
@@ -435,80 +567,133 @@ function renderEmployeeModal(emp) {
     inventoryCheckbox.checked ? 'Réalisé (OK)' : 'Non réalisé';
 
   // Liste des documents
-  renderDocumentsList(emp);
+  renderDocumentsList(emp, showSelectionControls);
+  updatePendingDocumentsSummary();
+
+  const validationSection = document.getElementById('document-validation-section');
+  if (validationSection) {
+    validationSection.classList.toggle('hidden', !showSelectionControls);
+  }
 }
 
-function renderDocumentsList(emp) {
+function renderDocumentsList(emp, showSelectionControls = true) {
   const container = document.getElementById('documents-list');
+  const visibleMissing = emp.scan === true ? emp.missingDocuments : [];
 
   container.innerHTML = emp.documents.map(doc => {
     const meta = STATUS_META[doc.status] || STATUS_META.missing;
+    const pendingStatus = state.pendingDocumentUpdates[doc.key] || '';
     const needsAction = doc.status !== 'complete' && doc.status !== 'na';
+    const hiddenBecausePreScan = emp.scan !== true;
 
     const valueDisplay = doc.status === 'missing'
       ? 'Non renseigné'
       : (doc.status === 'numeric' ? `Manque ${doc.value}` : doc.value);
 
     return `
-      <div class="document-row ${needsAction ? 'needs-action' : ''}" data-key="${escapeHtml(doc.key)}">
+      <div class="document-row ${pendingStatus ? 'pending' : ''} ${showSelectionControls ? '' : 'document-row--readonly'}" data-key="${escapeHtml(doc.key)}">
         <div>
           <div class="document-row__name">${escapeHtml(doc.label)}</div>
           <div class="document-row__value">${escapeHtml(valueDisplay)}</div>
         </div>
-        <span class="badge ${meta.color}"><span class="badge-dot"></span>${meta.label}</span>
-        ${needsAction ? `
-          <label class="switch doc-fix-toggle">
-            <input type="checkbox" class="doc-fix-checkbox" />
-            <span class="switch__slider"></span>
-          </label>
-        ` : `<span></span>`}
-        ${needsAction ? `
-          <div class="document-row__actions">
-            <input type="text" class="doc-comment-input" placeholder="Commentaire (optionnel)" />
-            <button class="btn btn-success btn-doc-save" disabled>
-              <i class="fa-solid fa-check"></i> Valider
-            </button>
+        ${hiddenBecausePreScan ? '<span class="document-row__pending document-row__pending--done">Scan 1 à faire</span>' : `<span class="badge ${meta.color}"><span class="badge-dot"></span>${meta.label}</span>`}
+        ${showSelectionControls && needsAction ? `
+          <div class="document-row__toggles">
+            <label class="chip-toggle chip-toggle--na">
+              <input type="checkbox" class="doc-status-checkbox" data-status="N/A" />
+              <span>N/A</span>
+            </label>
+            <label class="chip-toggle chip-toggle--cx">
+              <input type="checkbox" class="doc-status-checkbox" data-status="CX" />
+              <span>CX</span>
+            </label>
           </div>
         ` : ''}
+        <span class="document-row__pending ${pendingStatus ? '' : 'hidden'}">En attente : ${escapeHtml(pendingStatus)}</span>
       </div>
     `;
   }).join('');
 
-  // Interactions : cocher un document manquant révèle le champ commentaire + bouton
+  if (!showSelectionControls) return;
+
   container.querySelectorAll('.document-row').forEach(row => {
-    const checkbox = row.querySelector('.doc-fix-checkbox');
-    if (!checkbox) return;
-
-    const saveBtn = row.querySelector('.btn-doc-save');
-
-    checkbox.addEventListener('change', () => {
-      row.classList.toggle('expanded', checkbox.checked);
-      saveBtn.disabled = !checkbox.checked;
+    row.querySelectorAll('.doc-status-checkbox').forEach(checkbox => {
+      checkbox.addEventListener('change', () => handleDocumentCheckboxChange(row, checkbox));
     });
-
-    saveBtn.addEventListener('click', () => handleDocumentFix(row));
   });
 }
 
-/**
- * Valide un document manquant : appelle l'API pour forcer sa valeur à "X",
- * enregistre le commentaire, puis rafraîchit la fiche collaborateur.
- */
-async function handleDocumentFix(row) {
+function handleDocumentCheckboxChange(row, checkbox) {
   const key = row.dataset.key;
-  const commentaire = row.querySelector('.doc-comment-input').value.trim();
+  const status = checkbox.dataset.status;
+  const otherStatus = status === 'CX' ? 'N/A' : 'CX';
+  const otherCheckbox = row.querySelector(`.doc-status-checkbox[data-status="${otherStatus}"]`);
+
+  if (checkbox.checked) {
+    if (otherCheckbox) otherCheckbox.checked = false;
+    state.pendingDocumentUpdates[key] = status;
+  } else if (state.pendingDocumentUpdates[key] === status) {
+    delete state.pendingDocumentUpdates[key];
+  }
+
+  row.classList.toggle('pending', Boolean(state.pendingDocumentUpdates[key]));
+  const pendingBadge = row.querySelector('.document-row__pending');
+  if (pendingBadge) {
+    pendingBadge.textContent = state.pendingDocumentUpdates[key]
+      ? `En attente : ${state.pendingDocumentUpdates[key]}`
+      : '';
+    pendingBadge.classList.toggle('hidden', !state.pendingDocumentUpdates[key]);
+  }
+
+  updatePendingDocumentsSummary();
+}
+
+function updatePendingDocumentsSummary() {
+  const count = Object.keys(state.pendingDocumentUpdates).length;
+  const summary = document.getElementById('document-pending-count');
+  const validateBtn = document.getElementById('validate-documents-btn');
+  if (summary) {
+    summary.textContent = count > 0
+      ? `${count} document(s) prêt(s) à valider.`
+      : 'Aucun document sélectionné.';
+  }
+  if (validateBtn) {
+    validateBtn.disabled = count === 0;
+  }
+}
+
+function clearPendingDocumentSelections() {
+  state.pendingDocumentUpdates = {};
+  renderDocumentsList(state.currentEmployee);
+  updatePendingDocumentsSummary();
+}
+
+async function handleValidateDocuments() {
   const matricule = state.currentEmployee.matricule;
+  const updates = Object.entries(state.pendingDocumentUpdates).map(([key, status]) => ({ key, status }));
+  const commentaire = document.getElementById('document-validation-comment').value.trim();
+
+  if (!updates.length) {
+    showToast('Sélectionnez au moins un document à valider.', 'info');
+    return;
+  }
 
   showLoader();
+  setButtonLoading('validate-documents-btn', true);
+  setModalBusy(true);
   try {
-    const updated = await apiPost('updateDocument', { matricule, key, commentaire });
+    const updated = await apiPost('updateDocumentsBatch', { matricule, updates, commentaire });
     state.currentEmployee = updated;
     renderEmployeeModal(updated);
-    showToast('Document validé avec succès.', 'success');
+    showToast('Validation groupée enregistrée.', 'success');
     refreshEmployeeInList(updated);
+    scheduleDashboardRefresh();
+    scheduleEmployeesRefresh();
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
+    setModalBusy(false);
+    setButtonLoading('validate-documents-btn', false);
     hideLoader();
   }
 }
@@ -521,6 +706,7 @@ function refreshEmployeeInList(updatedEmployee) {
     ...state.employees[idx],
     completude: updatedEmployee.completude,
     scan: updatedEmployee.scan,
+    scan2: updatedEmployee.scan2,
     inventaire: updatedEmployee.inventaire
   };
   renderEmployeesTable(state.filteredEmployees);
@@ -543,7 +729,17 @@ function initModalActions() {
 
   document.getElementById('scan-save-btn').addEventListener('click', handleScanSave);
 
+  document.getElementById('scan2-checkbox').addEventListener('change', (e) => {
+    document.getElementById('scan2-status-label').textContent =
+      e.target.checked ? 'Scanné 2' : 'Non scanné 2';
+  });
+
+  document.getElementById('scan2-save-btn').addEventListener('click', handleScan2Save);
+
   document.getElementById('inventory-checkbox').addEventListener('change', handleInventoryToggle);
+
+  document.getElementById('validate-documents-btn').addEventListener('click', handleValidateDocuments);
+  document.getElementById('clear-document-selection-btn').addEventListener('click', clearPendingDocumentSelections);
 }
 
 async function handleScanSave() {
@@ -552,15 +748,46 @@ async function handleScanSave() {
   const commentaire = document.getElementById('scan-comment').value.trim();
 
   showLoader();
+  setButtonLoading('scan-save-btn', true);
+  setModalBusy(true);
   try {
     const updated = await apiPost('updateScan', { matricule, scan, commentaire });
     state.currentEmployee = updated;
     renderEmployeeModal(updated);
     showToast('Statut de scan enregistré.', 'success');
     refreshEmployeeInList(updated);
+    scheduleDashboardRefresh();
+    scheduleEmployeesRefresh();
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
+    setModalBusy(false);
+    setButtonLoading('scan-save-btn', false);
+    hideLoader();
+  }
+}
+
+async function handleScan2Save() {
+  const matricule = state.currentEmployee.matricule;
+  const scan2 = document.getElementById('scan2-checkbox').checked;
+  const commentaire = document.getElementById('scan2-comment').value.trim();
+
+  showLoader();
+  setButtonLoading('scan2-save-btn', true);
+  setModalBusy(true);
+  try {
+    const updated = await apiPost('updateScan2', { matricule, scan2, commentaire });
+    state.currentEmployee = updated;
+    renderEmployeeModal(updated);
+    showToast('Second scan enregistré.', 'success');
+    refreshEmployeeInList(updated);
+    scheduleDashboardRefresh();
+    scheduleEmployeesRefresh();
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    setModalBusy(false);
+    setButtonLoading('scan2-save-btn', false);
     hideLoader();
   }
 }
@@ -570,6 +797,7 @@ async function handleInventoryToggle(e) {
   const value = e.target.checked ? 'OK' : '';
 
   showLoader();
+  setModalBusy(true);
   try {
     const updated = await apiPost('updateInventory', { matricule, value });
     state.currentEmployee = updated;
@@ -581,8 +809,11 @@ async function handleInventoryToggle(e) {
     showToast(err.message, 'error');
     e.target.checked = !e.target.checked; // rollback visuel en cas d'erreur
   } finally {
+    setModalBusy(false);
     hideLoader();
   }
+  scheduleDashboardRefresh();
+  scheduleEmployeesRefresh();
 }
 
 // ============================================================================
@@ -599,4 +830,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initModalActions();
 
   loadDashboard();
+  document.addEventListener('visibilitychange', refreshVisibleData);
+  setInterval(refreshVisibleData, 30000);
 });

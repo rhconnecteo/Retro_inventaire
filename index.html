@@ -33,12 +33,6 @@
     </nav>
   </header>
 
-  <!-- ============================== LOADER ============================== -->
-  <div id="loader" class="loader-overlay hidden">
-    <div class="loader-spinner"></div>
-    <p>Chargement en cours...</p>
-  </div>
-
   <!-- ============================== TOASTS ============================== -->
   <div id="toast-container" class="toast-container"></div>
 
@@ -52,23 +46,28 @@
         <!-- Cartes statistiques générées dynamiquement par script.js -->
       </div>
 
-      <div class="charts-grid">
-        <div class="card chart-card">
-          <h2><i class="fa-solid fa-circle-check"></i> Dossiers complets / incomplets</h2>
-          <div class="chart-wrapper">
-            <canvas id="chart-completeness"></canvas>
-          </div>
+      <div class="card pole-summary-card">
+        <div class="card-heading">
+          <h2><i class="fa-solid fa-layer-group"></i> Résultats par pôle</h2>
+          <p>Complétude, scan 1 et scan 2 sont calculés automatiquement pour chaque pôle.</p>
         </div>
-        <div class="card chart-card">
-          <h2><i class="fa-solid fa-triangle-exclamation"></i> Documents les plus souvent manquants</h2>
-          <div class="chart-wrapper">
-            <canvas id="chart-missing-docs"></canvas>
-          </div>
+        <div id="poles-grid" class="poles-grid"></div>
+        <div class="chart-wrapper chart-wrapper--tall">
+          <canvas id="chart-poles"></canvas>
+        </div>
+      </div>
+
+      <br>
+
+      <div class="card chart-card">
+        <h2><i class="fa-solid fa-triangle-exclamation"></i> Documents les plus souvent manquants</h2>
+        <div class="chart-wrapper">
+          <canvas id="chart-missing-docs"></canvas>
         </div>
       </div>
     </section>
 
-    <!-- ========================== VUE : RECHERCHE ========================== -->
+    
     <section id="search-view" class="view">
       <h1 class="view-title">Recherche collaborateur</h1>
 
@@ -82,7 +81,7 @@
         </button>
       </div>
 
-      <!-- FILTRES -->
+
       <div class="filters card">
         <label class="filter-item">
           <span>Fonction</span>
@@ -183,6 +182,23 @@
           <p class="field-meta" id="scan-date-meta"></p>
         </div>
 
+        <!-- Bloc SECOND SCAN -->
+        <div class="section-block">
+          <h3><i class="fa-solid fa-barcode"></i> Second scan de complétude</h3>
+          <div class="scan-controls">
+            <label class="switch">
+              <input type="checkbox" id="scan2-checkbox" />
+              <span class="switch__slider"></span>
+            </label>
+            <span id="scan2-status-label">Non scanné 2</span>
+          </div>
+          <textarea id="scan2-comment" placeholder="Commentaire second scan (optionnel)"></textarea>
+          <button id="scan2-save-btn" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk"></i> Enregistrer le second scan
+          </button>
+          <p class="field-meta" id="scan2-date-meta"></p>
+        </div>
+
         <!-- Bloc INVENTAIRE -->
         <div class="section-block">
           <h3><i class="fa-solid fa-boxes-stacked"></i> Inventaire physique</h3>
@@ -198,9 +214,25 @@
         <!-- Bloc DOCUMENTS -->
         <div class="section-block">
           <h3><i class="fa-solid fa-file-lines"></i> Documents du dossier</h3>
+          <p class="field-meta">Choisissez <strong>N/A</strong> pour les pièces non applicables et <strong>CX</strong> pour les pièces validées au second passage, puis validez tout en une fois.</p>
           <div class="documents-list" id="documents-list">
             <!-- Généré dynamiquement -->
           </div>
+        </div>
+
+        <!-- Validation groupée -->
+        <div class="section-block modal-actions" id="document-validation-section">
+          <h3><i class="fa-solid fa-layer-group"></i> Validation groupée</h3>
+          <textarea id="document-validation-comment" placeholder="Commentaire global de validation (optionnel)"></textarea>
+          <div class="modal-actions__row">
+            <button id="clear-document-selection-btn" class="btn btn-text" type="button">
+              <i class="fa-solid fa-eraser"></i> Réinitialiser la sélection
+            </button>
+            <button id="validate-documents-btn" class="btn btn-success" type="button">
+              <i class="fa-solid fa-check-double"></i> Valider tout
+            </button>
+          </div>
+          <p class="field-meta" id="document-pending-count">Aucun document sélectionné.</p>
         </div>
 
       </div>

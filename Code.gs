@@ -12,7 +12,9 @@
  *    GET  ?action=getEmployee&matricule=...    -> fiche complète d'un collaborateur
  *    GET  ?action=getDashboard                 -> statistiques globales
  *    POST { action: "updateScan" }             -> met à jour AG / AH / AI
+ *    POST { action: "updateScan2" }            -> met à jour AM / AN / AO
  *    POST { action: "updateInventory" }        -> met à jour AF
+ *    POST { action: "updateDocumentsBatch" }   -> valide plusieurs documents (AJ / AK / AL)
  *    POST { action: "updateDocument" }         -> corrige un document (AK / AL / AJ)
  * ============================================================================
  */
@@ -36,14 +38,19 @@ const FIELDS = {
   NOM_PRENOMS: 3,              // C
   FONCTION: 4,                 // D
   RATTACHEMENT: 5,             // E
-  INVENTAIRE: 32,               // AF
-  SCAN: 33,                     // AG
-  COMMENTAIRE_SCAN: 34,         // AH
-  DATE_SCAN: 35,                // AI
-  COMPLETUDE: 36,                // AJ
-  COMMENTAIRE_COMPLETUDE: 37,    // AK
-  DATE_COMPLETUDE: 38            // AL
+  INVENTAIRE: 32,              // AF
+  SCAN: 33,                    // AG
+  COMMENTAIRE_SCAN: 34,        // AH
+  DATE_SCAN: 35,               // AI
+  COMPLETUDE: 36,              // AJ
+  COMMENTAIRE_COMPLETUDE: 37,   // AK
+  DATE_COMPLETUDE: 38,         // AL
+  SCAN2: 39,                   // AM
+  COMMENTAIRE_SCAN2: 40,       // AN
+  DATE_SCAN2: 41               // AO
 };
+
+const DATA_END_COL = FIELDS.DATE_SCAN2;
 
 // Liste ordonnée des documents à vérifier (colonnes F -> AE)
 const DOCUMENTS = [
@@ -127,6 +134,9 @@ function doPost(e) {
       case 'updateDocument':
         return jsonResponse({ success: true, data: updateDocument(body) });
 
+      case 'updateDocumentsBatch':
+        return jsonResponse({ success: true, data: updateDocumentsBatch(body) });
+
       default:
         return jsonResponse({ success: false, error: 'Action POST inconnue ou manquante : ' + action }, 400);
     }
@@ -186,10 +196,11 @@ function computeDocStatus(rawValue) {
   if (value === '') {
     return { status: 'missing', missingCount: null };
   }
-  if (value.toUpperCase() === 'X') {
+  const normalized = value.toUpperCase();
+  if (normalized === 'X' || normalized === 'CX') {
     return { status: 'complete', missingCount: null };
   }
-  if (value.toUpperCase() === 'N/A') {
+  if (normalized === 'N/A') {
     return { status: 'na', missingCount: null };
   }
   if (!isNaN(value) && value !== '') {
@@ -201,7 +212,7 @@ function computeDocStatus(rawValue) {
 
 /**
  * Calcule la complétude d'une ligne (COMPLET si tous les documents
- * valent "X" ou "N/A", sinon INCOMPLET).
+ * valent "X", "CX" ou "N/A", sinon INCOMPLET).
  */
 function computeCompleteness(rowValues) {
   for (let i = 0; i < DOCUMENTS.length; i++) {
@@ -212,6 +223,35 @@ function computeCompleteness(rowValues) {
     }
   }
   return 'COMPLET';
+}
+
+/**
+ * Indique si le dossier peut être évalué en complétude.
+ * Avant le scan 1, on évite d'afficher une complétude ou des statuts N/A/CX.
+ */
+function canEvaluateCompleteness(rowValues) {
+  return rowValues[FIELDS.SCAN - 1] === true;
+}
+
+/**
+ * Retourne la complétude métier d'un dossier.
+ * Tant que le scan 1 n'est pas validé, le dossier est considéré comme en attente.
+ */
+function getEmployeeCompleteness(rowValues) {
+  if (!canEvaluateCompleteness(rowValues)) {
+    return 'SCAN 1 À FAIRE';
+  }
+  return rowValues[FIELDS.COMPLETUDE - 1] || computeCompleteness(rowValues);
+}
+
+/**
+ * Retourne les documents à régulariser uniquement après Scan 1.
+ */
+function getVisibleMissingDocuments(rowValues) {
+  if (!canEvaluateCompleteness(rowValues)) {
+    return [];
+  }
+  return getMissingDocuments(rowValues);
 }
 
 /**
@@ -269,7 +309,10 @@ function rowToEmployee(rowValues) {
     scan: rowValues[FIELDS.SCAN - 1] === true,
     commentaireScan: rowValues[FIELDS.COMMENTAIRE_SCAN - 1] || '',
     dateScan: formatDate(rowValues[FIELDS.DATE_SCAN - 1]),
-    completude: rowValues[FIELDS.COMPLETUDE - 1] || computeCompleteness(rowValues),
+    scan2: rowValues[FIELDS.SCAN2 - 1] === true,
+    commentaireScan2: rowValues[FIELDS.COMMENTAIRE_SCAN2 - 1] || '',
+    dateScan2: formatDate(rowValues[FIELDS.DATE_SCAN2 - 1]),
+    completude: getEmployeeCompleteness(rowValues),
     commentaireCompletude: rowValues[FIELDS.COMMENTAIRE_COMPLETUDE - 1] || '',
     dateCompletude: formatDate(rowValues[FIELDS.DATE_COMPLETUDE - 1])
   };
@@ -287,6 +330,72 @@ function formatDate(value) {
   return String(value);
 }
 
+/**
+ * Déduit le pôle à partir du rattachement.
+ */
+function getPoleFromRattachement(rattachement) {
+  const value = String(rattachement || '').toUpperCase();
+  if (value.indexOf('TERSEA') !== -1) return 'Pôle TERSEA';
+  if (value.indexOf('COMETE') !== -1) return 'Pôle COMETE';
+  if (value.indexOf('YAS') !== -1) return 'Pôle YAS';
+  if (value.indexOf('MVOLA') !== -1) return 'Pôle MVOLA';
+  if (value.indexOf('OPEN FIELD') !== -1) return 'Pôle OPEN FIELD';
+  return 'Pôle SUPPORT';
+}
+
+/**
+ * Agrège les statistiques par pôle.
+ */
+function buildPoleStats(values) {
+  const poles = {};
+
+  values.forEach(row => {
+    const pole = getPoleFromRattachement(row[FIELDS.RATTACHEMENT - 1]);
+    if (!poles[pole]) {
+      poles[pole] = {
+        pole: pole,
+        totalEmployees: 0,
+        completeCount: 0,
+        scan1Count: 0,
+        scan2Count: 0,
+        applicableDocCells: 0,
+        completeDocCells: 0
+      };
+    }
+
+    const bucket = poles[pole];
+    bucket.totalEmployees++;
+
+    if (row[FIELDS.SCAN - 1] === true) bucket.scan1Count++;
+    if (row[FIELDS.SCAN2 - 1] === true) bucket.scan2Count++;
+
+    if (row[FIELDS.SCAN - 1] !== true) {
+      return;
+    }
+
+    const status = row[FIELDS.COMPLETUDE - 1] || computeCompleteness(row);
+    if (status === 'COMPLET') bucket.completeCount++;
+
+    DOCUMENTS.forEach(doc => {
+      const raw = row[doc.col - 1];
+      const { status: docStatus } = computeDocStatus(raw);
+      if (docStatus === 'na') return;
+      bucket.applicableDocCells++;
+      if (docStatus === 'complete') bucket.completeDocCells++;
+    });
+  });
+
+  return Object.values(poles)
+    .sort((a, b) => a.pole.localeCompare(b.pole))
+    .map(bucket => ({
+      pole: bucket.pole,
+      totalEmployees: bucket.totalEmployees,
+      completionRate: bucket.applicableDocCells > 0 ? Math.round((bucket.completeDocCells / bucket.applicableDocCells) * 100) : 100,
+      scan1Rate: bucket.totalEmployees > 0 ? Math.round((bucket.scan1Count / bucket.totalEmployees) * 100) : 0,
+      scan2Rate: bucket.totalEmployees > 0 ? Math.round((bucket.scan2Count / bucket.totalEmployees) * 100) : 0
+    }));
+}
+
 // ============================================================================
 // 5. ROUTES — LECTURE
 // ============================================================================
@@ -300,13 +409,13 @@ function getEmployees() {
   const lastRow = sheet.getLastRow();
   if (lastRow <= CONFIG.HEADER_ROW) return [];
 
-  const range = sheet.getRange(CONFIG.HEADER_ROW + 1, 1, lastRow - CONFIG.HEADER_ROW, FIELDS.DATE_COMPLETUDE);
+  const range = sheet.getRange(CONFIG.HEADER_ROW + 1, 1, lastRow - CONFIG.HEADER_ROW, DATA_END_COL);
   const values = range.getValues();
 
   return values
     .filter(row => String(row[FIELDS.MATRICULE - 1]).trim() !== '')
     .map(row => {
-      const completude = row[FIELDS.COMPLETUDE - 1] || computeCompleteness(row);
+      const completude = getEmployeeCompleteness(row);
       return {
         matricule: row[FIELDS.MATRICULE - 1],
         nomPrenoms: row[FIELDS.NOM_PRENOMS - 1],
@@ -314,7 +423,8 @@ function getEmployees() {
         rattachement: row[FIELDS.RATTACHEMENT - 1],
         completude: completude,
         scan: row[FIELDS.SCAN - 1] === true,
-        inventaire: row[FIELDS.INVENTAIRE - 1] || ''
+        inventaire: row[FIELDS.INVENTAIRE - 1] || '',
+        scan2: row[FIELDS.SCAN2 - 1] === true
       };
     });
 }
@@ -329,7 +439,7 @@ function getEmployee(matricule) {
   const rowIndex = findRowByMatricule(sheet, matricule);
   if (rowIndex === -1) throw new Error('Aucun collaborateur trouvé pour le matricule "' + matricule + '".');
 
-  const rowValues = sheet.getRange(rowIndex, 1, 1, FIELDS.DATE_COMPLETUDE).getValues()[0];
+  const rowValues = sheet.getRange(rowIndex, 1, 1, DATA_END_COL).getValues()[0];
   return rowToEmployee(rowValues);
 }
 
@@ -342,31 +452,46 @@ function getDashboard() {
   if (lastRow <= CONFIG.HEADER_ROW) {
     return {
       totalEmployees: 0, complete: 0, incomplete: 0,
-      scansDone: 0, inventoriesDone: 0, completionPercentage: 0,
-      missingDocsFrequency: []
+      scansDone: 0, scans2Done: 0, inventoriesDone: 0, completionPercentage: 0,
+      missingDocsFrequency: [],
+      poles: []
     };
   }
 
   const values = sheet
-    .getRange(CONFIG.HEADER_ROW + 1, 1, lastRow - CONFIG.HEADER_ROW, FIELDS.DATE_COMPLETUDE)
+    .getRange(CONFIG.HEADER_ROW + 1, 1, lastRow - CONFIG.HEADER_ROW, DATA_END_COL)
     .getValues()
     .filter(row => String(row[FIELDS.MATRICULE - 1]).trim() !== '');
 
-  let complete = 0, incomplete = 0, scansDone = 0, inventoriesDone = 0;
+  let complete = 0, incomplete = 0, scansDone = 0, scans2Done = 0, inventoriesDone = 0;
+  let completeDocCells = 0;
+  let applicableDocCells = 0;
   const missingFrequency = {}; // key -> count
   DOCUMENTS.forEach(doc => { missingFrequency[doc.key] = 0; });
 
   values.forEach(row => {
+    if (row[FIELDS.SCAN - 1] === true) scansDone++;
+    if (row[FIELDS.SCAN2 - 1] === true) scans2Done++;
+    if (String(row[FIELDS.INVENTAIRE - 1]).trim().toUpperCase() === 'OK') inventoriesDone++;
+
+    if (row[FIELDS.SCAN - 1] !== true) {
+      return;
+    }
+
     const status = row[FIELDS.COMPLETUDE - 1] || computeCompleteness(row);
     if (status === 'COMPLET') complete++; else incomplete++;
-
-    if (row[FIELDS.SCAN - 1] === true) scansDone++;
-    if (String(row[FIELDS.INVENTAIRE - 1]).trim().toUpperCase() === 'OK') inventoriesDone++;
 
     DOCUMENTS.forEach(doc => {
       const raw = row[doc.col - 1];
       const { status: docStatus } = computeDocStatus(raw);
-      if (docStatus !== 'complete' && docStatus !== 'na') {
+      if (docStatus === 'na') {
+        return;
+      }
+
+      applicableDocCells++;
+      if (docStatus === 'complete') {
+        completeDocCells++;
+      } else {
         missingFrequency[doc.key]++;
       }
     });
@@ -377,14 +502,18 @@ function getDashboard() {
     .map(doc => ({ key: doc.key, label: doc.label, count: missingFrequency[doc.key] }))
     .sort((a, b) => b.count - a.count);
 
+  const poles = buildPoleStats(values);
+
   return {
     totalEmployees: total,
     complete: complete,
     incomplete: incomplete,
     scansDone: scansDone,
+    scans2Done: scans2Done,
     inventoriesDone: inventoriesDone,
-    completionPercentage: total > 0 ? Math.round((complete / total) * 100) : 0,
-    missingDocsFrequency: missingDocsFrequency
+    completionPercentage: applicableDocCells > 0 ? Math.round((completeDocCells / applicableDocCells) * 100) : 100,
+    missingDocsFrequency: missingDocsFrequency,
+    poles: poles
   };
 }
 
@@ -412,7 +541,34 @@ function updateScan(body) {
     sheet.getRange(rowIndex, FIELDS.COMMENTAIRE_SCAN).setValue(commentaire || '');
     sheet.getRange(rowIndex, FIELDS.DATE_SCAN).setValue(scan === true ? new Date() : '');
 
-    const rowValues = sheet.getRange(rowIndex, 1, 1, FIELDS.DATE_COMPLETUDE).getValues()[0];
+    const rowValues = sheet.getRange(rowIndex, 1, 1, DATA_END_COL).getValues()[0];
+    return rowToEmployee(rowValues);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Met à jour le SECOND SCAN (colonne AM), le commentaire (AN)
+ * et la date (AO).
+ * body attendu : { matricule, scan2: true|false, commentaire }
+ */
+function updateScan2(body) {
+  const { matricule, scan2, commentaire } = body;
+  if (!matricule) throw new Error('Le champ "matricule" est requis.');
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sheet = getSheet();
+    const rowIndex = findRowByMatricule(sheet, matricule);
+    if (rowIndex === -1) throw new Error('Collaborateur introuvable : ' + matricule);
+
+    sheet.getRange(rowIndex, FIELDS.SCAN2).setValue(scan2 === true);
+    sheet.getRange(rowIndex, FIELDS.COMMENTAIRE_SCAN2).setValue(commentaire || '');
+    sheet.getRange(rowIndex, FIELDS.DATE_SCAN2).setValue(scan2 === true ? new Date() : '');
+
+    const rowValues = sheet.getRange(rowIndex, 1, 1, DATA_END_COL).getValues()[0];
     return rowToEmployee(rowValues);
   } finally {
     lock.releaseLock();
@@ -436,7 +592,7 @@ function updateInventory(body) {
 
     sheet.getRange(rowIndex, FIELDS.INVENTAIRE).setValue(value === 'OK' ? 'OK' : '');
 
-    const rowValues = sheet.getRange(rowIndex, 1, 1, FIELDS.DATE_COMPLETUDE).getValues()[0];
+    const rowValues = sheet.getRange(rowIndex, 1, 1, DATA_END_COL).getValues()[0];
     return rowToEmployee(rowValues);
   } finally {
     lock.releaseLock();
@@ -450,12 +606,15 @@ function updateInventory(body) {
  * body attendu : { matricule, key, commentaire }
  */
 function updateDocument(body) {
-  const { matricule, key, commentaire } = body;
+  const { matricule, key, commentaire, status } = body;
   if (!matricule) throw new Error('Le champ "matricule" est requis.');
   if (!key) throw new Error('Le champ "key" (identifiant du document) est requis.');
 
   const doc = DOCUMENTS.find(d => d.key === key);
   if (!doc) throw new Error('Document inconnu : ' + key);
+
+  const normalizedStatus = String(status || 'X').trim().toUpperCase();
+  const newValue = normalizedStatus === 'N/A' ? 'N/A' : (normalizedStatus === 'CX' ? 'CX' : 'X');
 
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -464,19 +623,67 @@ function updateDocument(body) {
     const rowIndex = findRowByMatricule(sheet, matricule);
     if (rowIndex === -1) throw new Error('Collaborateur introuvable : ' + matricule);
 
-    // 1. Validation du document -> "X"
-    sheet.getRange(rowIndex, doc.col).setValue('X');
+    // 1. Validation du document -> "X", "CX" ou "N/A"
+    sheet.getRange(rowIndex, doc.col).setValue(newValue);
 
     // 2. Commentaire et date de complétude
     sheet.getRange(rowIndex, FIELDS.COMMENTAIRE_COMPLETUDE).setValue(commentaire || '');
     sheet.getRange(rowIndex, FIELDS.DATE_COMPLETUDE).setValue(new Date());
 
     // 3. Recalcul automatique de la complétude globale (AJ)
-    const rowValues = sheet.getRange(rowIndex, 1, 1, FIELDS.DATE_COMPLETUDE).getValues()[0];
+    const rowValues = sheet.getRange(rowIndex, 1, 1, DATA_END_COL).getValues()[0];
     const newStatus = computeCompleteness(rowValues);
     sheet.getRange(rowIndex, FIELDS.COMPLETUDE).setValue(newStatus);
 
-    const updatedRow = sheet.getRange(rowIndex, 1, 1, FIELDS.DATE_COMPLETUDE).getValues()[0];
+    const updatedRow = sheet.getRange(rowIndex, 1, 1, DATA_END_COL).getValues()[0];
+    return rowToEmployee(updatedRow);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Valide plusieurs documents en une seule écriture logique.
+ * body attendu : { matricule, updates: [{ key, status }], commentaire }
+ */
+function updateDocumentsBatch(body) {
+  const { matricule, updates, commentaire } = body;
+  if (!matricule) throw new Error('Le champ "matricule" est requis.');
+  if (!Array.isArray(updates) || updates.length === 0) {
+    throw new Error('Le champ "updates" doit contenir au moins une mise à jour.');
+  }
+
+  const normalizedUpdates = updates.map(update => {
+    const doc = DOCUMENTS.find(d => d.key === update.key);
+    if (!doc) throw new Error('Document inconnu : ' + update.key);
+
+    const normalizedStatus = String(update.status || '').trim().toUpperCase();
+    if (normalizedStatus !== 'CX' && normalizedStatus !== 'N/A') {
+      throw new Error('Statut invalide pour "' + update.key + '" : ' + update.status);
+    }
+
+    return { doc, status: normalizedStatus };
+  });
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sheet = getSheet();
+    const rowIndex = findRowByMatricule(sheet, matricule);
+    if (rowIndex === -1) throw new Error('Collaborateur introuvable : ' + matricule);
+
+    normalizedUpdates.forEach(update => {
+      sheet.getRange(rowIndex, update.doc.col).setValue(update.status);
+    });
+
+    sheet.getRange(rowIndex, FIELDS.COMMENTAIRE_COMPLETUDE).setValue(commentaire || '');
+    sheet.getRange(rowIndex, FIELDS.DATE_COMPLETUDE).setValue(new Date());
+
+    const rowValues = sheet.getRange(rowIndex, 1, 1, DATA_END_COL).getValues()[0];
+    const newStatus = computeCompleteness(rowValues);
+    sheet.getRange(rowIndex, FIELDS.COMPLETUDE).setValue(newStatus);
+
+    const updatedRow = sheet.getRange(rowIndex, 1, 1, DATA_END_COL).getValues()[0];
     return rowToEmployee(updatedRow);
   } finally {
     lock.releaseLock();
