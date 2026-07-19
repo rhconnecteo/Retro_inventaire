@@ -128,6 +128,9 @@ function doPost(e) {
       case 'updateScan':
         return jsonResponse({ success: true, data: updateScan(body) });
 
+      case 'updateScan2':
+        return jsonResponse({ success: true, data: updateScan2(body) });
+
       case 'updateInventory':
         return jsonResponse({ success: true, data: updateInventory(body) });
 
@@ -379,9 +382,15 @@ function buildPoleStats(values) {
     DOCUMENTS.forEach(doc => {
       const raw = row[doc.col - 1];
       const { status: docStatus } = computeDocStatus(raw);
-      if (docStatus === 'na') return;
+      // N/A sont exclus du calcul (ne pas compter)
+      if (docStatus === 'na') {
+        return;
+      }
+      // Compter TOUTES les autres cellules (vide, X, CX, numeric, incorrect)
       bucket.applicableDocCells++;
-      if (docStatus === 'complete') bucket.completeDocCells++;
+      if (docStatus === 'complete') {
+        bucket.completeDocCells++;
+      }
     });
   });
 
@@ -390,7 +399,7 @@ function buildPoleStats(values) {
     .map(bucket => ({
       pole: bucket.pole,
       totalEmployees: bucket.totalEmployees,
-      completionRate: bucket.applicableDocCells > 0 ? Math.round((bucket.completeDocCells / bucket.applicableDocCells) * 100) : 100,
+      completionRate: bucket.applicableDocCells > 0 ? Math.round((bucket.completeDocCells / bucket.applicableDocCells) * 100) : 0,
       scan1Rate: bucket.totalEmployees > 0 ? Math.round((bucket.scan1Count / bucket.totalEmployees) * 100) : 0,
       scan2Rate: bucket.totalEmployees > 0 ? Math.round((bucket.scan2Count / bucket.totalEmployees) * 100) : 0
     }));
@@ -484,11 +493,13 @@ function getDashboard() {
     DOCUMENTS.forEach(doc => {
       const raw = row[doc.col - 1];
       const { status: docStatus } = computeDocStatus(raw);
+      // Exclure les N/A du calcul
       if (docStatus === 'na') {
         return;
       }
-
+      // Compter toutes les cellules sauf N/A (vide, X, CX, numeric, incorrect)
       applicableDocCells++;
+      
       if (docStatus === 'complete') {
         completeDocCells++;
       } else {
@@ -511,7 +522,7 @@ function getDashboard() {
     scansDone: scansDone,
     scans2Done: scans2Done,
     inventoriesDone: inventoriesDone,
-    completionPercentage: applicableDocCells > 0 ? Math.round((completeDocCells / applicableDocCells) * 100) : 100,
+    completionPercentage: applicableDocCells > 0 ? Math.round((completeDocCells / applicableDocCells) * 100) : 0,
     missingDocsFrequency: missingDocsFrequency,
     poles: poles
   };

@@ -9,7 +9,7 @@
 // ============================================================================
 
 // URL de déploiement du Web App Apps Script (voir README.md pour l'obtenir)
-const API_URL = 'https://script.google.com/macros/s/AKfycbzYOmJz7-zSF9husNYEVKJg3ZBksFttk4vsq7AtUYWEhVNLtwWroST52A8N5_mdwYfT/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbwtVG8jWwoQgmE_FihxiSvb8oHzYkXxnaNEidZXog2l_SJ9js_aueCqqr_sx5mNCnw-/exec';
 
 // Libellés et icônes de statut, utilisés partout dans l'UI
 const STATUS_META = {
@@ -27,6 +27,68 @@ const state = {
   currentEmployee: null, // fiche détaillée actuellement ouverte dans la modale
   pendingDocumentUpdates: {}
 };
+
+// ---------- AUTHENTIFICATION CLIENT (pré-définie + persistance) ----------
+const PREDEFINED_CREDENTIALS = { username: 'admin', password: 'admin123' };
+const AUTH_KEY = 'ri_auth'; // valeur '1' si connecté
+const VIEW_KEY = 'ri_view'; // conserve la vue courante entre rafraîchissements
+
+function isAuthenticated() {
+  return localStorage.getItem(AUTH_KEY) === '1';
+}
+function setAuthenticated(username) {
+  localStorage.setItem(AUTH_KEY, '1');
+  localStorage.setItem('ri_user', username || '');
+  updateAuthUI();
+}
+function clearAuth() {
+  localStorage.removeItem(AUTH_KEY);
+  localStorage.removeItem('ri_user');
+  updateAuthUI();
+}
+function updateAuthUI() {
+  const overlay = document.getElementById('login-overlay');
+  const logoutBtn = document.getElementById('logout-btn');
+  if (isAuthenticated()) {
+    if (overlay) overlay.classList.add('hidden');
+    if (logoutBtn) logoutBtn.classList.remove('hidden');
+  } else {
+    if (overlay) overlay.classList.remove('hidden');
+    if (logoutBtn) logoutBtn.classList.add('hidden');
+  }
+}
+
+function showLoginOverlay() {
+  const overlay = document.getElementById('login-overlay');
+  if (overlay) overlay.classList.remove('hidden');
+}
+
+function handleLogin() {
+  const u = (document.getElementById('login-username') || {}).value || '';
+  const p = (document.getElementById('login-password') || {}).value || '';
+  if (u === PREDEFINED_CREDENTIALS.username && p === PREDEFINED_CREDENTIALS.password) {
+    setAuthenticated(u);
+    showToast('Connecté', 'success');
+    const view = localStorage.getItem(VIEW_KEY) || 'dashboard-view';
+    showView(view);
+  } else {
+    showToast('Identifiants incorrects', 'error');
+  }
+}
+
+function handleLogout() {
+  clearAuth();
+  showToast('Déconnecté', 'info');
+  showLoginOverlay();
+}
+
+function showView(viewId) {
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewId));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === viewId));
+  if (viewId === 'dashboard-view') loadDashboard();
+  if (viewId === 'search-view' && state.employees.length === 0) loadEmployees();
+  localStorage.setItem(VIEW_KEY, viewId);
+}
 
 // ============================================================================
 // 2. COUCHE API (fetch)
@@ -154,14 +216,8 @@ function escapeHtml(str) {
 function initNavigation() {
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-
-      btn.classList.add('active');
-      document.getElementById(btn.dataset.view).classList.add('active');
-
-      if (btn.dataset.view === 'dashboard-view') loadDashboard();
-      if (btn.dataset.view === 'search-view' && state.employees.length === 0) loadEmployees();
+      const view = btn.dataset.view;
+      showView(view);
     });
   });
 }
@@ -548,14 +604,16 @@ function renderEmployeeModal(emp) {
   // Bloc SCAN
   const scanCheckbox = document.getElementById('scan-checkbox');
   scanCheckbox.checked = emp.scan === true;
-  document.getElementById('scan-status-label').textContent = emp.scan ? 'Scanné' : 'Non scanné';
+  scanCheckbox.disabled = emp.scan === true; // Bloquer une fois coché
+  document.getElementById('scan-status-label').textContent = emp.scan ? 'Scanné (non modifiable)' : 'Non scanné';
   document.getElementById('scan-comment').value = emp.commentaireScan || '';
   document.getElementById('scan-date-meta').textContent = emp.dateScan
     ? `Dernière mise à jour : ${emp.dateScan}` : '';
 
   const scan2Checkbox = document.getElementById('scan2-checkbox');
   scan2Checkbox.checked = emp.scan2 === true;
-  document.getElementById('scan2-status-label').textContent = emp.scan2 ? 'Scanné 2' : 'Non scanné 2';
+  scan2Checkbox.disabled = emp.scan2 === true; // Bloquer une fois coché
+  document.getElementById('scan2-status-label').textContent = emp.scan2 ? 'Scanné 2 (non modifiable)' : 'Non scanné 2';
   document.getElementById('scan2-comment').value = emp.commentaireScan2 || '';
   document.getElementById('scan2-date-meta').textContent = emp.dateScan2
     ? `Dernière mise à jour : ${emp.dateScan2}` : '';
@@ -747,6 +805,12 @@ async function handleScanSave() {
   const scan = document.getElementById('scan-checkbox').checked;
   const commentaire = document.getElementById('scan-comment').value.trim();
 
+  // Empêcher de décocher un scan déjà validé
+  if (state.currentEmployee.scan === true && scan === false) {
+    showToast('Impossible de décocher un scan déjà enregistré. Veuillez contacter l\'administrateur.', 'error');
+    return;
+  }
+
   showLoader();
   setButtonLoading('scan-save-btn', true);
   setModalBusy(true);
@@ -771,6 +835,12 @@ async function handleScan2Save() {
   const matricule = state.currentEmployee.matricule;
   const scan2 = document.getElementById('scan2-checkbox').checked;
   const commentaire = document.getElementById('scan2-comment').value.trim();
+
+  // Empêcher de décocher un scan 2 déjà validé
+  if (state.currentEmployee.scan2 === true && scan2 === false) {
+    showToast('Impossible de décocher un second scan déjà enregistré. Veuillez contacter l\'administrateur.', 'error');
+    return;
+  }
 
   showLoader();
   setButtonLoading('scan2-save-btn', true);
@@ -825,11 +895,28 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast('Configurez API_URL dans script.js avant utilisation (voir README.md).', 'error');
   }
 
+  // attache les handlers généraux
   initNavigation();
   initSearch();
   initModalActions();
 
-  loadDashboard();
+  // login / logout
+  const loginBtn = document.getElementById('login-btn');
+  if (loginBtn) loginBtn.addEventListener('click', handleLogin);
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) logoutBtn.addEventListener('click', handleLogout);
+
+  // restaurer l'état (auth + vue)
+  updateAuthUI();
+  const savedView = localStorage.getItem(VIEW_KEY) || 'dashboard-view';
+  if (isAuthenticated()) {
+    showView(savedView);
+  } else {
+    // afficher le login après un bref délai pour laisser l'accueil se charger
+    setTimeout(() => showLoginOverlay(), 500);
+    // laisser la vue visible en dessous mais bloquée par l'overlay
+  }
+
   document.addEventListener('visibilitychange', refreshVisibleData);
   setInterval(refreshVisibleData, 30000);
 });
