@@ -1,17 +1,5 @@
-/* ============================================================================
-   GESTION DES DOSSIERS RH — FRONTEND (script.js)
-   Communique EXCLUSIVEMENT avec le backend Google Apps Script (Code.gs)
-   via des appels fetch() au format JSON. Aucun accès direct à Google Sheets.
-   ============================================================================ */
-
-// ============================================================================
-// 1. CONFIGURATION
-// ============================================================================
-
-// URL de déploiement du Web App Apps Script (voir README.md pour l'obtenir)
 const API_URL = 'https://script.google.com/macros/s/AKfycbwtVG8jWwoQgmE_FihxiSvb8oHzYkXxnaNEidZXog2l_SJ9js_aueCqqr_sx5mNCnw-/exec';
 
-// Libellés et icônes de statut, utilisés partout dans l'UI
 const STATUS_META = {
   complete:  { label: 'Complet',        color: 'complete', icon: 'fa-circle-check' },
   numeric:   { label: 'Manquant(s)',    color: 'numeric',  icon: 'fa-triangle-exclamation' },
@@ -29,9 +17,9 @@ const state = {
 };
 
 // ---------- AUTHENTIFICATION CLIENT (pré-définie + persistance) ----------
-const PREDEFINED_CREDENTIALS = { username: 'admin', password: 'admin123' };
-const AUTH_KEY = 'ri_auth'; // valeur '1' si connecté
-const VIEW_KEY = 'ri_view'; // conserve la vue courante entre rafraîchissements
+const PREDEFINED_CREDENTIALS = { username: 'gestiondossier', password: 'rhconnecteomdp' };
+const AUTH_KEY = 'ri_auth';
+const VIEW_KEY = 'ri_view';
 
 function isAuthenticated() {
   return localStorage.getItem(AUTH_KEY) === '1';
