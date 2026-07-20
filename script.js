@@ -1,5 +1,17 @@
-const API_URL = 'https://script.google.com/macros/s/AKfycbwtVG8jWwoQgmE_FihxiSvb8oHzYkXxnaNEidZXog2l_SJ9js_aueCqqr_sx5mNCnw-/exec';
+/* ============================================================================
+   GESTION DES DOSSIERS RH — FRONTEND (script.js)
+   Communique EXCLUSIVEMENT avec le backend Google Apps Script (Code.gs)
+   via des appels fetch() au format JSON. Aucun accès direct à Google Sheets.
+   ============================================================================ */
 
+// ============================================================================
+// 1. CONFIGURATION
+// ============================================================================
+
+// URL de déploiement du Web App Apps Script (voir README.md pour l'obtenir)
+const API_URL = 'https://script.google.com/macros/s/AKfycbyIMkA3ab9vH7PBDJOymEkcP4feV2lgchnB7PaOKazJotCCX3MgbMI4jR99zPqQN_lO/exec';
+
+// Libellés et icônes de statut, utilisés partout dans l'UI
 const STATUS_META = {
   complete:  { label: 'Complet',        color: 'complete', icon: 'fa-circle-check' },
   numeric:   { label: 'Manquant(s)',    color: 'numeric',  icon: 'fa-triangle-exclamation' },
@@ -18,18 +30,28 @@ const state = {
 
 // ---------- AUTHENTIFICATION CLIENT (pré-définie + persistance) ----------
 const PREDEFINED_CREDENTIALS = { username: 'gestiondossier', password: 'rhconnecteomdp' };
-const AUTH_KEY = 'ri_auth';
-const VIEW_KEY = 'ri_view';
+const AUTH_KEY = 'ri_auth'; // valeur '1' si connecté
+const VIEW_KEY = 'ri_view'; // conserve la vue courante entre rafraîchissements
+const SEARCH_STATE_KEY = 'ri_search_state'; // conserve la recherche et les filtres
+let loginOverlayTimer = null;
 
 function isAuthenticated() {
   return localStorage.getItem(AUTH_KEY) === '1';
 }
 function setAuthenticated(username) {
+  if (loginOverlayTimer) {
+    clearTimeout(loginOverlayTimer);
+    loginOverlayTimer = null;
+  }
   localStorage.setItem(AUTH_KEY, '1');
   localStorage.setItem('ri_user', username || '');
   updateAuthUI();
 }
 function clearAuth() {
+  if (loginOverlayTimer) {
+    clearTimeout(loginOverlayTimer);
+    loginOverlayTimer = null;
+  }
   localStorage.removeItem(AUTH_KEY);
   localStorage.removeItem('ri_user');
   updateAuthUI();
@@ -37,28 +59,54 @@ function clearAuth() {
 function updateAuthUI() {
   const overlay = document.getElementById('login-overlay');
   const logoutBtn = document.getElementById('logout-btn');
-  if (isAuthenticated()) {
-    if (overlay) overlay.classList.add('hidden');
-    if (logoutBtn) logoutBtn.classList.remove('hidden');
-  } else {
-    if (overlay) overlay.classList.remove('hidden');
-    if (logoutBtn) logoutBtn.classList.add('hidden');
+  const authenticated = isAuthenticated();
+
+  if (overlay) {
+    overlay.classList.toggle('hidden', authenticated);
+    overlay.setAttribute('aria-hidden', authenticated ? 'true' : 'false');
+    if (authenticated) {
+      overlay.setAttribute('inert', '');
+    } else {
+      overlay.removeAttribute('inert');
+    }
+  }
+
+  if (logoutBtn) {
+    logoutBtn.classList.toggle('hidden', !authenticated);
   }
 }
 
 function showLoginOverlay() {
   const overlay = document.getElementById('login-overlay');
-  if (overlay) overlay.classList.remove('hidden');
+  if (overlay) {
+    if (loginOverlayTimer) {
+      clearTimeout(loginOverlayTimer);
+      loginOverlayTimer = null;
+    }
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden', 'false');
+    overlay.removeAttribute('inert');
+    loginOverlayTimer = setTimeout(() => {
+      const usernameInput = document.getElementById('login-username');
+      if (usernameInput) usernameInput.focus();
+      loginOverlayTimer = null;
+    }, 50);
+  }
 }
 
 function handleLogin() {
-  const u = (document.getElementById('login-username') || {}).value || '';
-  const p = (document.getElementById('login-password') || {}).value || '';
+  const u = ((document.getElementById('login-username') || {}).value || '').trim();
+  const p = ((document.getElementById('login-password') || {}).value || '').trim();
   if (u === PREDEFINED_CREDENTIALS.username && p === PREDEFINED_CREDENTIALS.password) {
     setAuthenticated(u);
     showToast('Connecté', 'success');
     const view = localStorage.getItem(VIEW_KEY) || 'dashboard-view';
     showView(view);
+    setTimeout(() => {
+      updateAuthUI();
+      const activeView = document.querySelector('.view.active');
+      if (activeView) activeView.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
   } else {
     showToast('Identifiants incorrects', 'error');
   }
@@ -348,10 +396,9 @@ async function loadEmployees() {
   try {
     state.employees = await apiGet('getEmployees');
     state.filteredEmployees = state.employees;
-    // remplir les options de filtre puis initialiser les événements de filtre
     populateFilterOptions(state.employees);
     initFilters();
-    renderEmployeesTable(state.filteredEmployees);
+    restoreSearchState();
   } catch (err) {
     showToast(err.message, 'error');
   } finally {}
@@ -369,13 +416,13 @@ function renderEmployeesTable(list) {
   noResults.classList.add('hidden');
 
   tbody.innerHTML = list.map(emp => {
-    const canEvaluate = emp.scan === true;
-    const isComplete = emp.completude === 'COMPLET';
-    const completBadge = !canEvaluate
-      ? `<span class="badge na"><span class="badge-dot"></span>Scan 1 à faire</span>`
-      : isComplete
+    const completenessValue = String(emp.completude || '').toUpperCase();
+    const isComplete = completenessValue === 'COMPLET';
+    const completBadge = isComplete
       ? `<span class="badge complete"><span class="badge-dot"></span>Complet</span>`
-      : `<span class="badge incorrect"><span class="badge-dot"></span>Incomplet</span>`;
+      : completenessValue === 'INCOMPLET'
+      ? `<span class="badge incorrect"><span class="badge-dot"></span>Incomplet</span>`
+      : `<span class="badge warning"><span class="badge-dot"></span>${escapeHtml(completenessValue || 'À vérifier')}</span>`;
 
     const scanBadge = emp.scan
       ? `<span class="badge complete"><span class="badge-dot"></span>Scanné</span>`
@@ -408,22 +455,63 @@ function renderEmployeesTable(list) {
   });
 }
 
+function saveSearchState() {
+  const payload = {
+    term: (document.getElementById('search-input') || {}).value || '',
+    fonction: (document.getElementById('filter-fonction') || {}).value || '',
+    rattachement: (document.getElementById('filter-rattachement') || {}).value || '',
+    inventaire: (document.getElementById('filter-inventaire') || {}).value || '',
+    scan: (document.getElementById('filter-scan') || {}).value || ''
+  };
+  localStorage.setItem(SEARCH_STATE_KEY, JSON.stringify(payload));
+}
+
+function restoreSearchState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SEARCH_STATE_KEY) || '{}');
+    const input = document.getElementById('search-input');
+    const fSel = document.getElementById('filter-fonction');
+    const rSel = document.getElementById('filter-rattachement');
+    const invSel = document.getElementById('filter-inventaire');
+    const scSel = document.getElementById('filter-scan');
+
+    if (input) input.value = saved.term || '';
+    if (fSel) fSel.value = saved.fonction || '';
+    if (rSel) rSel.value = saved.rattachement || '';
+    if (invSel) invSel.value = saved.inventaire || '';
+    if (scSel) scSel.value = saved.scan || '';
+  } catch (err) {
+    localStorage.removeItem(SEARCH_STATE_KEY);
+  }
+  applyFilters();
+}
+
 function initSearch() {
   const input = document.getElementById('search-input');
   const clearBtn = document.getElementById('search-clear');
 
-  input.addEventListener('input', () => applyFilters());
+  if (input) {
+    input.addEventListener('input', () => {
+      applyFilters();
+    });
+  }
 
-  clearBtn.addEventListener('click', () => {
-    input.value = '';
-    // reset filters UI
-    document.getElementById('filter-fonction').value = '';
-    document.getElementById('filter-rattachement').value = '';
-    document.getElementById('filter-inventaire').value = '';
-    document.getElementById('filter-scan').value = '';
-    state.filteredEmployees = state.employees;
-    renderEmployeesTable(state.filteredEmployees);
-  });
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      if (input) input.value = '';
+      const fSel = document.getElementById('filter-fonction');
+      const rSel = document.getElementById('filter-rattachement');
+      const invSel = document.getElementById('filter-inventaire');
+      const scSel = document.getElementById('filter-scan');
+      if (fSel) fSel.value = '';
+      if (rSel) rSel.value = '';
+      if (invSel) invSel.value = '';
+      if (scSel) scSel.value = '';
+      state.filteredEmployees = state.employees;
+      renderEmployeesTable(state.filteredEmployees);
+      saveSearchState();
+    });
+  }
 }
 
 // ============================================================================
@@ -468,17 +556,19 @@ function populateFilterOptions(list) {
 function initFilters() {
   ['filter-fonction','filter-rattachement','filter-inventaire','filter-scan'].forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.addEventListener('change', () => applyFilters());
+    if (el) el.addEventListener('change', () => {
+      applyFilters();
+    });
   });
 }
 
 /** Applique les filtres et la recherche sur la liste d'employés */
 function applyFilters() {
-  const term = (document.getElementById('search-input').value || '').trim().toLowerCase();
-  const f = document.getElementById('filter-fonction').value;
-  const r = document.getElementById('filter-rattachement').value;
-  const inv = document.getElementById('filter-inventaire').value; // 'realise' / 'non_realise' / ''
-  const sc = document.getElementById('filter-scan').value; // 'realise' / 'non_realise' / ''
+  const term = ((document.getElementById('search-input') || {}).value || '').trim().toLowerCase();
+  const f = (document.getElementById('filter-fonction') || {}).value || '';
+  const r = (document.getElementById('filter-rattachement') || {}).value || '';
+  const inv = (document.getElementById('filter-inventaire') || {}).value || ''; // 'realise' / 'non_realise' / ''
+  const sc = (document.getElementById('filter-scan') || {}).value || ''; // 'realise' / 'non_realise' / ''
 
   state.filteredEmployees = state.employees.filter(emp => {
     if (term) {
@@ -494,6 +584,7 @@ function applyFilters() {
     return true;
   });
   renderEmployeesTable(state.filteredEmployees);
+  saveSearchState();
 }
 
 function scheduleDashboardRefresh(delay = 250) {
@@ -530,16 +621,18 @@ function refreshVisibleData() {
 // ============================================================================
 
 async function openEmployeeModal(matricule) {
-  showLoader();
+  state.currentEmployee = { matricule, loading: true };
+  renderEmployeeModal(state.currentEmployee);
+  document.getElementById('employee-modal').classList.remove('hidden');
+
   try {
     const employee = await apiGet('getEmployee', { matricule });
     state.currentEmployee = employee;
     renderEmployeeModal(employee);
-    document.getElementById('employee-modal').classList.remove('hidden');
   } catch (err) {
+    state.currentEmployee = { matricule, loading: false, error: err.message };
+    renderEmployeeModal(state.currentEmployee);
     showToast(err.message, 'error');
-  } finally {
-    hideLoader();
   }
 }
 
@@ -551,19 +644,30 @@ function closeEmployeeModal() {
 
 function renderEmployeeModal(emp) {
   state.pendingDocumentUpdates = {};
-  const canEvaluate = emp.scan === true;
-  const showSelectionControls = canEvaluate && emp.completude !== 'COMPLET';
-  document.getElementById('modal-employee-name').textContent = emp.nomPrenoms || '—';
-  document.getElementById('modal-employee-sub').textContent =
-    `Matricule ${emp.matricule} · ${emp.fonction || '—'}`;
+  const isLoading = emp && emp.loading === true;
+  const isError = emp && emp.error;
+
+  const completenessValue = isLoading || isError ? '' : String(emp.completude || '').toUpperCase();
+  const isComplete = completenessValue === 'COMPLET';
+  const showSelectionControls = !isLoading && !isError && completenessValue !== 'COMPLET';
+
+  document.getElementById('modal-employee-name').textContent = isLoading ? 'Chargement…' : (emp.nomPrenoms || '—');
+  document.getElementById('modal-employee-sub').textContent = isLoading
+    ? 'Récupération des informations du collaborateur…'
+    : `Matricule ${emp.matricule} · ${emp.fonction || '—'}`;
 
   // Infos générales
-  const infoItems = [
-    { label: 'Matricule', value: emp.matricule },
-    { label: "Date d'embauche", value: emp.dateEmbauche },
-    { label: 'Fonction', value: emp.fonction },
-    { label: 'Rattachement', value: emp.rattachement }
-  ];
+  const infoItems = isLoading
+    ? [
+        { label: 'Matricule', value: emp.matricule },
+        { label: 'Statut', value: 'Chargement des données…' }
+      ]
+    : [
+        { label: 'Matricule', value: emp.matricule },
+        { label: "Date d'embauche", value: emp.dateEmbauche },
+        { label: 'Fonction', value: emp.fonction },
+        { label: 'Rattachement', value: emp.rattachement }
+      ];
   document.getElementById('modal-info-grid').innerHTML = infoItems.map(item => `
     <div class="info-item">
       <div class="info-item__label">${escapeHtml(item.label)}</div>
@@ -571,49 +675,53 @@ function renderEmployeeModal(emp) {
     </div>
   `).join('');
 
-  // Alerte de complétude (carte "Annulé"-style bien visible)
+  // Alerte de complétude
   const alertEl = document.getElementById('modal-completeness-alert');
-  if (!canEvaluate) {
-    alertEl.className = 'completeness-alert pending';
-    alertEl.innerHTML = `<i class="fa-solid fa-hourglass-half"></i><div><div>Dossier <strong>EN ATTENTE</strong> — lancez d'abord le <strong>Scan 1</strong> pour calculer la complétude.</div></div>`;
+  if (isLoading) {
+    alertEl.className = 'completeness-alert incomplete';
+    alertEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><div><div>Chargement des informations…</div></div>';
+  } else if (isError) {
+    alertEl.className = 'completeness-alert incomplete';
+    alertEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i><div><div>${escapeHtml(emp.error || 'Impossible de charger les informations.')}</div></div>`;
   } else {
-    const isComplete = emp.completude === 'COMPLET';
-    const missingList = emp.missingDocuments.length
-      ? `<ul class="completeness-alert__list">${emp.missingDocuments.map(doc => `<li>${escapeHtml(doc.label)}</li>`).join('')}</ul>`
+    const missingList = (emp.missingDocuments || []).length
+      ? `<ul class="completeness-alert__list">${(emp.missingDocuments || []).map(doc => `<li>${escapeHtml(doc.label)}</li>`).join('')}</ul>`
       : '';
     alertEl.className = `completeness-alert ${isComplete ? 'complete' : 'incomplete'}`;
     alertEl.innerHTML = isComplete
       ? `<i class="fa-solid fa-circle-check"></i><div><div>Dossier <strong>COMPLET</strong> — aucun document à régulariser.</div>${missingList}</div>`
-      : `<i class="fa-solid fa-triangle-exclamation"></i><div><div>Dossier <strong>INCOMPLET</strong> — ${emp.missingDocuments.length} document(s) à régulariser.</div>${missingList}</div>`;
+      : `<i class="fa-solid fa-triangle-exclamation"></i><div><div>Dossier <strong>INCOMPLET</strong> — ${(emp.missingDocuments || []).length} document(s) à régulariser.</div>${missingList}</div>`;
   }
 
-  document.getElementById('document-validation-comment').value = emp.commentaireCompletude || '';
+  document.getElementById('document-validation-comment').value = isLoading || isError ? '' : (emp.commentaireCompletude || '');
 
   // Bloc SCAN
   const scanCheckbox = document.getElementById('scan-checkbox');
-  scanCheckbox.checked = emp.scan === true;
-  scanCheckbox.disabled = emp.scan === true; // Bloquer une fois coché
-  document.getElementById('scan-status-label').textContent = emp.scan ? 'Scanné (non modifiable)' : 'Non scanné';
-  document.getElementById('scan-comment').value = emp.commentaireScan || '';
-  document.getElementById('scan-date-meta').textContent = emp.dateScan
-    ? `Dernière mise à jour : ${emp.dateScan}` : '';
+  scanCheckbox.checked = isLoading || isError ? false : emp.scan === true;
+  scanCheckbox.disabled = isLoading || isError || emp.scan === true;
+  document.getElementById('scan-status-label').textContent = isLoading || isError ? 'Chargement…' : (emp.scan ? 'Scanné (non modifiable)' : 'Non scanné');
+  document.getElementById('scan-comment').value = isLoading || isError ? '' : (emp.commentaireScan || '');
+  document.getElementById('scan-date-meta').textContent = isLoading || isError ? '' : (emp.dateScan ? `Dernière mise à jour : ${emp.dateScan}` : '');
 
   const scan2Checkbox = document.getElementById('scan2-checkbox');
-  scan2Checkbox.checked = emp.scan2 === true;
-  scan2Checkbox.disabled = emp.scan2 === true; // Bloquer une fois coché
-  document.getElementById('scan2-status-label').textContent = emp.scan2 ? 'Scanné 2 (non modifiable)' : 'Non scanné 2';
-  document.getElementById('scan2-comment').value = emp.commentaireScan2 || '';
-  document.getElementById('scan2-date-meta').textContent = emp.dateScan2
-    ? `Dernière mise à jour : ${emp.dateScan2}` : '';
+  scan2Checkbox.checked = isLoading || isError ? false : emp.scan2 === true;
+  scan2Checkbox.disabled = isLoading || isError || emp.scan2 === true;
+  document.getElementById('scan2-status-label').textContent = isLoading || isError ? 'Chargement…' : (emp.scan2 ? 'Scanné 2 (non modifiable)' : 'Non scanné 2');
+  document.getElementById('scan2-comment').value = isLoading || isError ? '' : (emp.commentaireScan2 || '');
+  document.getElementById('scan2-date-meta').textContent = isLoading || isError ? '' : (emp.dateScan2 ? `Dernière mise à jour : ${emp.dateScan2}` : '');
 
   // Bloc INVENTAIRE
   const inventoryCheckbox = document.getElementById('inventory-checkbox');
-  inventoryCheckbox.checked = String(emp.inventaire).toUpperCase() === 'OK';
-  document.getElementById('inventory-status-label').textContent =
-    inventoryCheckbox.checked ? 'Réalisé (OK)' : 'Non réalisé';
+  inventoryCheckbox.checked = isLoading || isError ? false : String(emp.inventaire).toUpperCase() === 'OK';
+  inventoryCheckbox.disabled = isLoading || isError;
+  document.getElementById('inventory-status-label').textContent = isLoading || isError ? 'Chargement…' : (inventoryCheckbox.checked ? 'Réalisé (OK)' : 'Non réalisé');
 
   // Liste des documents
-  renderDocumentsList(emp, showSelectionControls);
+  if (isLoading) {
+    document.getElementById('documents-list').innerHTML = '<div class="document-row document-row--readonly"><div><div class="document-row__name">Chargement des documents…</div><div class="document-row__value">Veuillez patienter.</div></div></div>';
+  } else {
+    renderDocumentsList(emp, showSelectionControls);
+  }
   updatePendingDocumentsSummary();
 
   const validationSection = document.getElementById('document-validation-section');
@@ -624,13 +732,11 @@ function renderEmployeeModal(emp) {
 
 function renderDocumentsList(emp, showSelectionControls = true) {
   const container = document.getElementById('documents-list');
-  const visibleMissing = emp.scan === true ? emp.missingDocuments : [];
 
   container.innerHTML = emp.documents.map(doc => {
     const meta = STATUS_META[doc.status] || STATUS_META.missing;
     const pendingStatus = state.pendingDocumentUpdates[doc.key] || '';
     const needsAction = doc.status !== 'complete' && doc.status !== 'na';
-    const hiddenBecausePreScan = emp.scan !== true;
 
     const valueDisplay = doc.status === 'missing'
       ? 'Non renseigné'
@@ -642,7 +748,7 @@ function renderDocumentsList(emp, showSelectionControls = true) {
           <div class="document-row__name">${escapeHtml(doc.label)}</div>
           <div class="document-row__value">${escapeHtml(valueDisplay)}</div>
         </div>
-        ${hiddenBecausePreScan ? '<span class="document-row__pending document-row__pending--done">Scan 1 à faire</span>' : `<span class="badge ${meta.color}"><span class="badge-dot"></span>${meta.label}</span>`}
+        <span class="badge ${meta.color}"><span class="badge-dot"></span>${meta.label}</span>
         ${showSelectionControls && needsAction ? `
           <div class="document-row__toggles">
             <label class="chip-toggle chip-toggle--na">
@@ -889,8 +995,20 @@ document.addEventListener('DOMContentLoaded', () => {
   initModalActions();
 
   // login / logout
+  const loginForm = document.getElementById('login-form');
   const loginBtn = document.getElementById('login-btn');
-  if (loginBtn) loginBtn.addEventListener('click', handleLogin);
+  if (loginForm) {
+    loginForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      handleLogin();
+    });
+  }
+  if (loginBtn) {
+    loginBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      handleLogin();
+    });
+  }
   const logoutBtn = document.getElementById('logout-btn');
   if (logoutBtn) logoutBtn.addEventListener('click', handleLogout);
 
@@ -901,7 +1019,7 @@ document.addEventListener('DOMContentLoaded', () => {
     showView(savedView);
   } else {
     // afficher le login après un bref délai pour laisser l'accueil se charger
-    setTimeout(() => showLoginOverlay(), 500);
+    loginOverlayTimer = setTimeout(() => showLoginOverlay(), 500);
     // laisser la vue visible en dessous mais bloquée par l'overlay
   }
 
