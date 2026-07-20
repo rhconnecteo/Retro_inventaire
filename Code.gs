@@ -230,30 +230,28 @@ function computeCompleteness(rowValues) {
 
 /**
  * Indique si le dossier peut être évalué en complétude.
- * Avant le scan 1, on évite d'afficher une complétude ou des statuts N/A/CX.
+ * La complétude est désormais calculée même avant validation du Scan 1.
  */
 function canEvaluateCompleteness(rowValues) {
-  return rowValues[FIELDS.SCAN - 1] === true;
+  return true;
 }
 
 /**
  * Retourne la complétude métier d'un dossier.
- * Tant que le scan 1 n'est pas validé, le dossier est considéré comme en attente.
+ * Même avant le Scan 1, on peut afficher la complétude à partir des valeurs document.
  */
 function getEmployeeCompleteness(rowValues) {
-  if (!canEvaluateCompleteness(rowValues)) {
-    return 'SCAN 1 À FAIRE';
+  const explicitStatus = rowValues[FIELDS.COMPLETUDE - 1];
+  if (explicitStatus) {
+    return explicitStatus;
   }
-  return rowValues[FIELDS.COMPLETUDE - 1] || computeCompleteness(rowValues);
+  return computeCompleteness(rowValues);
 }
 
 /**
- * Retourne les documents à régulariser uniquement après Scan 1.
+ * Retourne les documents à régulariser, même avant Scan 1.
  */
 function getVisibleMissingDocuments(rowValues) {
-  if (!canEvaluateCompleteness(rowValues)) {
-    return [];
-  }
   return getMissingDocuments(rowValues);
 }
 
@@ -372,10 +370,6 @@ function buildPoleStats(values) {
     if (row[FIELDS.SCAN - 1] === true) bucket.scan1Count++;
     if (row[FIELDS.SCAN2 - 1] === true) bucket.scan2Count++;
 
-    if (row[FIELDS.SCAN - 1] !== true) {
-      return;
-    }
-
     const status = row[FIELDS.COMPLETUDE - 1] || computeCompleteness(row);
     if (status === 'COMPLET') bucket.completeCount++;
 
@@ -482,10 +476,6 @@ function getDashboard() {
     if (row[FIELDS.SCAN - 1] === true) scansDone++;
     if (row[FIELDS.SCAN2 - 1] === true) scans2Done++;
     if (String(row[FIELDS.INVENTAIRE - 1]).trim().toUpperCase() === 'OK') inventoriesDone++;
-
-    if (row[FIELDS.SCAN - 1] !== true) {
-      return;
-    }
 
     const status = row[FIELDS.COMPLETUDE - 1] || computeCompleteness(row);
     if (status === 'COMPLET') complete++; else incomplete++;
