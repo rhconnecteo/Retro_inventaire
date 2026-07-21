@@ -35,24 +35,37 @@ const CONFIG = {
 const FIELDS = {
   MATRICULE: 1,               // A
   DATE_EMBAUCHE: 2,           // B
-  NOM_PRENOMS: 3,              // C
-  FONCTION: 4,                 // D
-  RATTACHEMENT: 5,             // E
-  INVENTAIRE: 32,              // AF
-  SCAN: 33,                    // AG
-  COMMENTAIRE_SCAN: 34,        // AH
-  DATE_SCAN: 35,               // AI
-  COMPLETUDE: 36,              // AJ
-  COMMENTAIRE_COMPLETUDE: 37,   // AK
-  DATE_COMPLETUDE: 38,         // AL
-  SCAN2: 39,                   // AM
-  COMMENTAIRE_SCAN2: 40,       // AN
-  DATE_SCAN2: 41               // AO
+  NOM_PRENOMS: 3,             // C
+  FONCTION: 4,                // D
+  RATTACHEMENT: 5,            // E
+  // Documents de F à AE (colonnes 6 à 31)
+  // INVENTAIRE: AF (32)
+  INVENTAIRE: 32,             // AF
+  // SCAN: AG (33)
+  SCAN: 33,                   // AG
+  COMMENTAIRE_SCAN: 34,       // AH
+  DATE_SCAN: 35,              // AI
+  // COMPLETUDE: AJ (36)
+  COMPLETUDE: 36,             // AJ
+  COMMENTAIRE_COMPLETUDE: 37, // AK
+  DATE_COMPLETUDE: 38,        // AL
+  // SCAN2: AM (39)
+  SCAN2: 39,                  // AM
+  COMMENTAIRE_SCAN2: 40,      // AN
+  DATE_SCAN2: 41              // AO
 };
 
-const DATA_END_COL = FIELDS.DATE_SCAN2;
+// NOUVELLES COLONNES AJOUTÉES (AP à AU)
+const EXTRA_FIELDS = {
+  AUTORISATION_IMAGE: 42,     // AP
+  RENOUVELLEMENT_PE: 43,      // AQ
+  CONFIRMATION_PE: 44,        // AR
+  // Les colonnes AS, AT, AU peuvent être utilisées pour d'autres données
+};
 
-// Liste ordonnée des documents à vérifier (colonnes F -> AE)
+const DATA_END_COL = 47; // Jusqu'à AU (colonne 47)
+
+// Liste complète des documents (F -> AE, plus AP, AQ, AR)
 const DOCUMENTS = [
   { col: 6,  key: 'cin',              label: '02 CIN légal' },
   { col: 7,  key: 'residence',        label: '01 résidence' },
@@ -69,17 +82,24 @@ const DOCUMENTS = [
   { col: 18, key: 'acteEnfant',       label: 'Actes de naissance + certificat de scolarité enfant' },
   { col: 19, key: 'certifVieEnfant',  label: 'Certificat de vie enfant' },
   { col: 20, key: 'photosEnfant',     label: '03 photos enfant' },
-  { col: 21, key: 'ostie',            label: 'OSTIE' },
-  { col: 22, key: 'cnaps',            label: 'CNAPS' },
-  { col: 23, key: 'allianz',          label: 'ALLIANZ' },
-  { col: 24, key: 'fpr',              label: 'FPR' },
-  { col: 25, key: 'contratTravail',   label: 'Contrat de travail' },
-  { col: 26, key: 'ficheDePoste',     label: 'Fiche de poste' },
-  { col: 27, key: 'ficheIndiv',       label: 'Fiche individuelle' },
-  { col: 28, key: 'lettreEngagement', label: "Lettre d'engagement" },
-  { col: 29, key: 'charteSia',        label: 'Charte SIA' },
-  { col: 30, key: 'charteConfid',     label: 'Charte de confidentialité' },
-  { col: 31, key: 'paiementMvola',    label: 'Paiement Mvola' }
+  { col: 21, key: 'ascoma',           label: 'ASCOMA' },
+  { col: 22, key: 'ostie',            label: 'OSTIE' },
+  { col: 23, key: 'cnaps',            label: 'CNAPS' },
+  { col: 24, key: 'allianz',          label: 'ALLIANZ' },
+  { col: 25, key: 'fpr',              label: 'FPR' },
+  { col: 26, key: 'enqueteMoralite',  label: 'Enquête de moralité' },
+  { col: 27, key: 'notificationEmbauche', label: 'Notification embauche' },
+  { col: 28, key: 'contratTravail',   label: 'Contrat de travail' },
+  { col: 29, key: 'ficheDePoste',     label: 'Fiche de poste' },
+  { col: 30, key: 'ficheIndiv',       label: 'Fiche individuelle' },
+  { col: 31, key: 'lettreEngagement', label: "Lettre d'engagement" },
+  // NOUVEAUX DOCUMENTS
+  { col: 32, key: 'charteSia',        label: 'Charte SI' },
+  { col: 33, key: 'charteConfid',     label: 'Charte confidentialité' },
+  { col: 34, key: 'paiementMvola',    label: 'Paiement Mvola' },
+  { col: 35, key: 'autorisationImage', label: 'Autorisation exploitation d\'image' },
+  { col: 36, key: 'renouvellementPE', label: 'Lettre de renouvellement PE' },
+  { col: 37, key: 'confirmationPE',   label: 'Lettre de confirmation PE' }
 ];
 
 // ============================================================================
@@ -727,7 +747,7 @@ function recalculateAllCompleteness() {
   const lastRow = sheet.getLastRow();
   if (lastRow <= CONFIG.HEADER_ROW) return;
 
-  const range = sheet.getRange(CONFIG.HEADER_ROW + 1, 1, lastRow - CONFIG.HEADER_ROW, FIELDS.DATE_COMPLETUDE);
+  const range = sheet.getRange(CONFIG.HEADER_ROW + 1, 1, lastRow - CONFIG.HEADER_ROW, DATA_END_COL);
   const values = range.getValues();
 
   values.forEach((row, i) => {

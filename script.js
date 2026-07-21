@@ -9,7 +9,8 @@
 // ============================================================================
 
 // URL de déploiement du Web App Apps Script (voir README.md pour l'obtenir)
-const API_URL = 'https://script.google.com/macros/s/AKfycbyIMkA3ab9vH7PBDJOymEkcP4feV2lgchnB7PaOKazJotCCX3MgbMI4jR99zPqQN_lO/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbzXghF2C0Tdw_h4xCrptZ0Ov-zrRAzG_N30D8FkI6lOJk_pmq0wvkhF2dbgclRvA9bb/exec';
+
 
 // Libellés et icônes de statut, utilisés partout dans l'UI
 const STATUS_META = {
