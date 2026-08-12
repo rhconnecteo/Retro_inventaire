@@ -866,6 +866,23 @@ textarea:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px var(-
 
 /* ============================== TOASTS ============================== */
 
+.api-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-radius: var(--radius-sm);
+  background: #fef3f2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+  margin-bottom: 18px;
+  font-weight: 600;
+}
+
+.api-error.hidden {
+  display: none !important;
+}
+
 .toast-container {
   position: fixed;
   bottom: 20px;

@@ -9,7 +9,7 @@
 // ============================================================================
 
 // URL de déploiement du Web App Apps Script (voir README.md pour l'obtenir)
-const API_URL = 'https://script.google.com/macros/s/AKfycbzXghF2C0Tdw_h4xCrptZ0Ov-zrRAzG_N30D8FkI6lOJk_pmq0wvkhF2dbgclRvA9bb/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbxdz_1LRcOFATWUwAseMRMBjQjRSJb3b5xZb3Q6UTfsHFoAhGcFXcw5NlJjKLyLKJpL/exec';
 
 
 // Libellés et icônes de statut, utilisés partout dans l'UI
@@ -170,7 +170,18 @@ async function apiPost(action, payload = {}) {
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ action, ...payload })
   });
-  const json = await response.json();
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Erreur réseau ${response.status} ${response.statusText}: ${text || 'URL introuvable'}`);
+  }
+
+  let json;
+  try {
+    json = await response.json();
+  } catch (err) {
+    throw new Error('Réponse API invalide ou non JSON.');
+  }
+
   if (!json.success) throw new Error(json.error || 'Erreur API inconnue.');
   return json.data;
 }
@@ -249,6 +260,19 @@ function showToast(message, type = 'info') {
   }, 3200);
 }
 
+function showApiError(message) {
+  const el = document.getElementById('api-error');
+  if (!el) return;
+  el.textContent = message;
+  el.classList.remove('hidden');
+}
+
+function hideApiError() {
+  const el = document.getElementById('api-error');
+  if (!el) return;
+  el.classList.add('hidden');
+}
+
 /** Échappe le HTML pour éviter toute injection lors de l'affichage de données. */
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
@@ -286,6 +310,7 @@ let lastEmployeesLoad = 0;
 
 async function loadDashboard() {
   lastDashboardLoad = Date.now();
+  hideApiError();
   showLoader();
   try {
     const data = await apiGet('getDashboard');
@@ -295,6 +320,16 @@ async function loadDashboard() {
     renderMissingDocsChart(data);
   } catch (err) {
     showToast(err.message, 'error');
+    showApiError('Impossible de charger les données du tableau de bord. Vérifiez le déploiement backend.');
+    renderStatsCards({
+      totalEmployees: '—',
+      completionPercentage: '—',
+      scansDone: '—',
+      scans2Done: '—',
+      inventoriesDone: '—'
+    });
+    renderPoleCards({ poles: [] });
+    renderMissingDocsChart({ missingDocsFrequency: [] });
   } finally {
     hideLoader();
   }
@@ -410,6 +445,7 @@ function renderMissingDocsChart(data) {
 
 async function loadEmployees() {
   lastEmployeesLoad = Date.now();
+  hideApiError();
   showLoader();
   try {
     state.employees = await apiGet('getEmployees');
@@ -419,6 +455,11 @@ async function loadEmployees() {
     restoreSearchState();
   } catch (err) {
     showToast(err.message, 'error');
+    showApiError('Impossible de charger la liste des collaborateurs. Vérifiez le déploiement backend.');
+    state.employees = [];
+    state.filteredEmployees = [];
+    populateFilterOptions([]);
+    renderEmployeesTable([]);
   } finally {
     hideLoader();
   }
