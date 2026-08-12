@@ -90,7 +90,10 @@
 
     <!-- ========================== VUE : DASHBOARD ========================== -->
     <section id="dashboard-view" class="view active">
-      <h1 class="view-title">Tableau de bord</h1>
+      <div class="view-header">
+        <h1 class="view-title">Tableau de bord</h1>
+        <button id="dashboard-refresh-btn" class="btn btn-text">Rafraîchir</button>
+      </div>
 
       <div class="stats-grid" id="stats-grid">
         <!-- Cartes statistiques générées dynamiquement par script.js -->
@@ -118,7 +121,10 @@
 
     
     <section id="search-view" class="view">
-      <h1 class="view-title">Recherche collaborateur</h1>
+      <div class="view-header">
+        <h1 class="view-title">Recherche collaborateur</h1>
+        <button id="search-refresh-btn" class="btn btn-text">Rafraîchir</button>
+      </div>
 
       <div class="search-bar card">
         <div class="search-field">

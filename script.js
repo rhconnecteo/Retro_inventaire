@@ -296,6 +296,23 @@ function initNavigation() {
   });
 }
 
+function initRefreshButtons() {
+  const dashboardBtn = document.getElementById('dashboard-refresh-btn');
+  const searchBtn = document.getElementById('search-refresh-btn');
+
+  if (dashboardBtn) {
+    dashboardBtn.addEventListener('click', () => {
+      loadDashboard();
+    });
+  }
+
+  if (searchBtn) {
+    searchBtn.addEventListener('click', () => {
+      loadEmployees();
+    });
+  }
+}
+
 // ============================================================================
 // 5. TABLEAU DE BORD
 // ============================================================================
@@ -303,10 +320,6 @@ function initNavigation() {
 let completenessChart = null;
 let missingDocsChart = null;
 let polesChart = null;
-let dashboardRefreshTimer = null;
-let employeesRefreshTimer = null;
-let lastDashboardLoad = 0;
-let lastEmployeesLoad = 0;
 
 async function loadDashboard() {
   lastDashboardLoad = Date.now();
@@ -648,31 +661,11 @@ function applyFilters() {
   saveSearchState();
 }
 
-function scheduleDashboardRefresh(delay = 250) {
-  if (dashboardRefreshTimer) clearTimeout(dashboardRefreshTimer);
-  dashboardRefreshTimer = setTimeout(() => {
-    if (document.getElementById('dashboard-view').classList.contains('active')) {
-      loadDashboard();
-    }
-  }, delay);
-}
-
-function scheduleEmployeesRefresh(delay = 250) {
-  if (employeesRefreshTimer) clearTimeout(employeesRefreshTimer);
-  employeesRefreshTimer = setTimeout(() => {
-    if (document.getElementById('search-view').classList.contains('active')) {
-      loadEmployees();
-    }
-  }, delay);
-}
-
-function refreshVisibleData() {
-  if (document.visibilityState !== 'visible') return;
-  const now = Date.now();
-  if (document.getElementById('dashboard-view').classList.contains('active') && now - lastDashboardLoad > 5000) {
+function reloadVisibleData() {
+  if (document.getElementById('dashboard-view').classList.contains('active')) {
     loadDashboard();
   }
-  if (document.getElementById('search-view').classList.contains('active') && now - lastEmployeesLoad > 5000) {
+  if (document.getElementById('search-view').classList.contains('active')) {
     loadEmployees();
   }
 }
@@ -916,8 +909,7 @@ async function handleValidateDocuments() {
     renderEmployeeModal(updated);
     showToast('Validation groupée enregistrée.', 'success');
     refreshEmployeeInList(updated);
-    scheduleDashboardRefresh();
-    scheduleEmployeesRefresh();
+    reloadVisibleData();
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
@@ -991,8 +983,7 @@ async function handleScanSave() {
     renderEmployeeModal(updated);
     showToast('Statut de scan enregistré.', 'success');
     refreshEmployeeInList(updated);
-    scheduleDashboardRefresh();
-    scheduleEmployeesRefresh();
+    reloadVisibleData();
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
@@ -1022,8 +1013,7 @@ async function handleScan2Save() {
     renderEmployeeModal(updated);
     showToast('Second scan enregistré.', 'success');
     refreshEmployeeInList(updated);
-    scheduleDashboardRefresh();
-    scheduleEmployeesRefresh();
+    reloadVisibleData();
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
@@ -1053,8 +1043,7 @@ async function handleInventoryToggle(e) {
     setModalBusy(false);
     hideLoader();
   }
-  scheduleDashboardRefresh();
-  scheduleEmployeesRefresh();
+  reloadVisibleData();
 }
 
 // ============================================================================
@@ -1069,6 +1058,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // attache les handlers généraux
   initNavigation();
   initSearch();
+  initRefreshButtons();
   initModalActions();
 
   // login / logout
@@ -1100,6 +1090,4 @@ document.addEventListener('DOMContentLoaded', () => {
     // laisser la vue visible en dessous mais bloquée par l'overlay
   }
 
-  document.addEventListener('visibilitychange', refreshVisibleData);
-  setInterval(refreshVisibleData, 30000);
 });
