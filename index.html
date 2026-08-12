@@ -38,23 +38,25 @@
   <div id="login-overlay" class="login-overlay hidden" aria-hidden="true" inert>
     <div class="bg" aria-hidden="true"></div>
     <div class="login-box" role="dialog" aria-modal="true">
-      <div class="brand">
-        <img src="logo.png" alt="Logo" class="login-logo" />
-        <div>
-          <h2 style="color: #079faa;">Gestions des données RH</h2>
+      <form id="login-form">
+        <div class="brand">
+          <img src="logo.png" alt="Logo" class="login-logo" />
+          <div>
+            <h2 style="color: #079faa;">Gestions des données RH</h2>
+          </div>
         </div>
-      </div>
-      <div>
-        <label for="login-username">Nom d'utilisateur</label>
-        <input id="login-username" type="text" autocomplete="username" />
-      </div>
-      <div>
-        <label for="login-password">Mot de passe</label>
-        <input id="login-password" type="password" autocomplete="current-password" />
-      </div>
-      <div class="login-actions">
-        <button id="login-btn" class="btn btn-primary">Se connecter</button>
-      </div>
+        <div>
+          <label for="login-username">Nom d'utilisateur</label>
+          <input id="login-username" type="text" autocomplete="username" />
+        </div>
+        <div>
+          <label for="login-password">Mot de passe</label>
+          <input id="login-password" type="password" autocomplete="current-password" />
+        </div>
+        <div class="login-actions">
+          <button type="submit" id="login-btn" class="btn btn-primary">Se connecter</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -79,6 +81,9 @@
 
   <!-- ============================== TOASTS ============================== -->
   <div id="toast-container" class="toast-container"></div>
+  <div id="loader" class="loader-overlay hidden" aria-hidden="true">
+    <div class="loader-spinner" role="status" aria-label="Chargement en cours"></div>
+  </div>
 
   <main class="app-main">
 

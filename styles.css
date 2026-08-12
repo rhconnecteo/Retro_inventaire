@@ -797,6 +797,31 @@ textarea:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px var(-
   box-shadow: none;
 }
 
+.loader-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.38);
+  pointer-events: none;
+}
+.loader-overlay:not(.hidden) {
+  pointer-events: all;
+}
+.loader-spinner {
+  width: 48px;
+  height: 48px;
+  border: 5px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .modal-actions__row {
   display: flex;
   gap: 10px;

@@ -26,7 +26,8 @@ const state = {
   employees: [],       // liste résumée (vue recherche)
   filteredEmployees: [],
   currentEmployee: null, // fiche détaillée actuellement ouverte dans la modale
-  pendingDocumentUpdates: {}
+  pendingDocumentUpdates: {},
+  employeeDetails: {} // cache des fiches collaborateurs pour éviter des recharges inutiles
 };
 
 // ---------- AUTHENTIFICATION CLIENT (pré-définie + persistance) ----------
@@ -138,8 +139,20 @@ function showView(viewId) {
  */
 async function apiGet(action, params = {}) {
   const query = new URLSearchParams({ action, ...params }).toString();
-  const response = await fetch(`${API_URL}?${query}`, { method: 'GET' });
-  const json = await response.json();
+  const url = `${API_URL}?${query}`;
+  const response = await fetch(url, { method: 'GET' });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Erreur réseau ${response.status} ${response.statusText}: ${text || 'URL introuvable'}`);
+  }
+
+  let json;
+  try {
+    json = await response.json();
+  } catch (err) {
+    throw new Error('Réponse API invalide ou non JSON.');
+  }
+
   if (!json.success) throw new Error(json.error || 'Erreur API inconnue.');
   return json.data;
 }
@@ -273,6 +286,7 @@ let lastEmployeesLoad = 0;
 
 async function loadDashboard() {
   lastDashboardLoad = Date.now();
+  showLoader();
   try {
     const data = await apiGet('getDashboard');
     renderStatsCards(data);
@@ -281,7 +295,9 @@ async function loadDashboard() {
     renderMissingDocsChart(data);
   } catch (err) {
     showToast(err.message, 'error');
-  } finally {}
+  } finally {
+    hideLoader();
+  }
 }
 
 function renderStatsCards(data) {
@@ -394,6 +410,7 @@ function renderMissingDocsChart(data) {
 
 async function loadEmployees() {
   lastEmployeesLoad = Date.now();
+  showLoader();
   try {
     state.employees = await apiGet('getEmployees');
     state.filteredEmployees = state.employees;
@@ -402,7 +419,9 @@ async function loadEmployees() {
     restoreSearchState();
   } catch (err) {
     showToast(err.message, 'error');
-  } finally {}
+  } finally {
+    hideLoader();
+  }
 }
 
 function renderEmployeesTable(list) {
@@ -622,18 +641,28 @@ function refreshVisibleData() {
 // ============================================================================
 
 async function openEmployeeModal(matricule) {
+  const cacheKey = String(matricule);
   state.currentEmployee = { matricule, loading: true };
   renderEmployeeModal(state.currentEmployee);
   document.getElementById('employee-modal').classList.remove('hidden');
 
+  if (state.employeeDetails[cacheKey]) {
+    state.currentEmployee = state.employeeDetails[cacheKey];
+    renderEmployeeModal(state.currentEmployee);
+  }
+
+  showLoader();
   try {
     const employee = await apiGet('getEmployee', { matricule });
+    state.employeeDetails[cacheKey] = employee;
     state.currentEmployee = employee;
     renderEmployeeModal(employee);
   } catch (err) {
     state.currentEmployee = { matricule, loading: false, error: err.message };
     renderEmployeeModal(state.currentEmployee);
     showToast(err.message, 'error');
+  } finally {
+    hideLoader();
   }
 }
 
@@ -720,6 +749,8 @@ function renderEmployeeModal(emp) {
   // Liste des documents
   if (isLoading) {
     document.getElementById('documents-list').innerHTML = '<div class="document-row document-row--readonly"><div><div class="document-row__name">Chargement des documents…</div><div class="document-row__value">Veuillez patienter.</div></div></div>';
+  } else if (isError) {
+    document.getElementById('documents-list').innerHTML = `<div class="document-row document-row--readonly"><div><div class="document-row__name">Erreur de chargement</div><div class="document-row__value">${escapeHtml(emp.error || 'Aucune donnée disponible.')}</div></div></div>`;
   } else {
     renderDocumentsList(emp, showSelectionControls);
   }
@@ -733,6 +764,10 @@ function renderEmployeeModal(emp) {
 
 function renderDocumentsList(emp, showSelectionControls = true) {
   const container = document.getElementById('documents-list');
+  if (!emp || !Array.isArray(emp.documents)) {
+    container.innerHTML = '<div class="document-row document-row--readonly"><div><div class="document-row__name">Aucun document à afficher</div><div class="document-row__value">La fiche collaborateur est introuvable ou incomplète.</div></div></div>';
+    return;
+  }
 
   container.innerHTML = emp.documents.map(doc => {
     const meta = STATUS_META[doc.status] || STATUS_META.missing;
