@@ -9,8 +9,9 @@
 // ============================================================================
 
 // URL de déploiement du Web App Apps Script (voir README.md pour l'obtenir)
-const API_URL = 'https://script.google.com/macros/s/AKfycbxdz_1LRcOFATWUwAseMRMBjQjRSJb3b5xZb3Q6UTfsHFoAhGcFXcw5NlJjKLyLKJpL/exec';
-
+// ⚠️ Doit correspondre EXACTEMENT à l'URL /exec affichée dans
+// Déployer > Gérer les déploiements de l'éditeur Apps Script.
+const API_URL = 'https://script.google.com/macros/s/AKfycbxJTqM0iUWUubnsHGSmuBc5jBjRMkhpPCCFZpSzxA-k0ypUrqo_wbFvRnNSbvXTqNBG/exec';
 
 // Libellés et icônes de statut, utilisés partout dans l'UI
 const STATUS_META = {
@@ -124,13 +125,58 @@ function showView(viewId) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewId));
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === viewId));
   if (viewId === 'dashboard-view') loadDashboard();
-  if (viewId === 'search-view' && state.employees.length === 0) loadEmployees();
+  if (viewId === 'search-view') loadEmployees();
   localStorage.setItem(VIEW_KEY, viewId);
 }
 
 // ============================================================================
-// 2. COUCHE API (fetch)
+// 2. COUCHE API (fetch) — avec diagnostics d'erreur détaillés
 // ============================================================================
+
+/**
+ * Interprète une réponse HTTP en échec et lève une erreur
+ * avec un message actionnable (au lieu d'un simple code HTTP).
+ */
+async function interpretApiFailure(response) {
+  if (response.status === 404) {
+    throw new Error(
+      "Le déploiement Apps Script renvoie une erreur 404. " +
+      "Dans l'éditeur Apps Script : Déployer > Gérer les déploiements > " +
+      "modifiez le déploiement existant (icône crayon) > Version : " +
+      "'Nouvelle version' > Déployer. Vérifiez aussi que API_URL " +
+      "correspond exactement à l'URL /exec affichée."
+    );
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(
+      "Accès refusé par Apps Script (" + response.status + "). " +
+      "Vérifiez que le déploiement a 'Qui a accès : Tout le monde' " +
+      "et 'Exécuter en tant que : Moi'."
+    );
+  }
+  const text = await response.text();
+  throw new Error(`Erreur réseau ${response.status} ${response.statusText}: ${text || 'Réponse vide'}`);
+}
+
+/**
+ * Parse le corps de la réponse en JSON, avec détection du cas fréquent
+ * où Apps Script renvoie une page HTML (connexion Google) au lieu de JSON.
+ */
+function parseApiResponse(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    const lower = raw.toLowerCase();
+    if (lower.includes('accounts.google.com') || lower.includes('<!doctype html')) {
+      throw new Error(
+        "L'API a renvoyé une page HTML au lieu de JSON — le déploiement " +
+        "demande probablement une connexion Google ou n'est pas public. " +
+        "Vérifiez les paramètres de partage du déploiement (Qui a accès : Tout le monde)."
+      );
+    }
+    throw new Error('Réponse API invalide ou non JSON : ' + raw.slice(0, 200));
+  }
+}
 
 /**
  * Effectue un appel GET vers l'API Apps Script.
@@ -140,18 +186,23 @@ function showView(viewId) {
 async function apiGet(action, params = {}) {
   const query = new URLSearchParams({ action, ...params }).toString();
   const url = `${API_URL}?${query}`;
-  const response = await fetch(url, { method: 'GET' });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Erreur réseau ${response.status} ${response.statusText}: ${text || 'URL introuvable'}`);
+
+  let response;
+  try {
+    response = await fetch(url, { method: 'GET' });
+  } catch (networkErr) {
+    throw new Error(
+      `Impossible de contacter l'API (${networkErr.message}). ` +
+      `Vérifiez votre connexion et que API_URL est correct.`
+    );
   }
 
-  let json;
-  try {
-    json = await response.json();
-  } catch (err) {
-    throw new Error('Réponse API invalide ou non JSON.');
+  if (!response.ok) {
+    await interpretApiFailure(response);
   }
+
+  const raw = await response.text();
+  const json = parseApiResponse(raw);
 
   if (!json.success) throw new Error(json.error || 'Erreur API inconnue.');
   return json.data;
@@ -165,25 +216,44 @@ async function apiGet(action, params = {}) {
  * @param {Object} payload - données envoyées dans le corps
  */
 async function apiPost(action, payload = {}) {
-  const response = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action, ...payload })
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Erreur réseau ${response.status} ${response.statusText}: ${text || 'URL introuvable'}`);
+  let response;
+  try {
+    response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action, ...payload })
+    });
+  } catch (networkErr) {
+    throw new Error(
+      `Impossible de contacter l'API (${networkErr.message}). ` +
+      `Vérifiez votre connexion et que API_URL est correct.`
+    );
   }
 
-  let json;
-  try {
-    json = await response.json();
-  } catch (err) {
-    throw new Error('Réponse API invalide ou non JSON.');
+  if (!response.ok) {
+    await interpretApiFailure(response);
   }
+
+  const raw = await response.text();
+  const json = parseApiResponse(raw);
 
   if (!json.success) throw new Error(json.error || 'Erreur API inconnue.');
   return json.data;
+}
+
+/**
+ * Vérification de santé au démarrage : ping l'API et affiche un
+ * message clair et persistant si le déploiement est cassé,
+ * AVANT que l'utilisateur ne tente de se connecter ou charge des données.
+ */
+async function checkApiHealth() {
+  try {
+    await apiGet('ping');
+    hideApiError();
+  } catch (err) {
+    showApiError("Connexion à l'API impossible : " + err.message);
+    showToast('Problème de connexion à l\'API — voir le message en haut de page.', 'error');
+  }
 }
 
 // ============================================================================
@@ -308,7 +378,7 @@ function initRefreshButtons() {
 
   if (searchBtn) {
     searchBtn.addEventListener('click', () => {
-      loadEmployees();
+      loadEmployees(true);
     });
   }
 }
@@ -326,14 +396,23 @@ async function loadDashboard() {
   hideApiError();
   showLoader();
   try {
-    const data = await apiGet('getDashboard');
-    renderStatsCards(data);
-    renderPoleCards(data);
-    renderPoleChart(data);
-    renderMissingDocsChart(data);
+    const data = await apiGet('getAppData');
+    const dashboard = data.dashboard || data;
+    renderStatsCards(dashboard);
+    renderPoleCards(dashboard);
+    renderPoleChart(dashboard);
+    renderMissingDocsChart(dashboard);
+
+    if (!state.employees.length && Array.isArray(data.employees)) {
+      state.employees = data.employees;
+      state.filteredEmployees = data.employees;
+      populateFilterOptions(state.employees);
+      initFilters();
+      restoreSearchState();
+    }
   } catch (err) {
     showToast(err.message, 'error');
-    showApiError('Impossible de charger les données du tableau de bord. Vérifiez le déploiement backend.');
+    showApiError('Impossible de charger les données du tableau de bord : ' + err.message);
     renderStatsCards({
       totalEmployees: '—',
       completionPercentage: '—',
@@ -456,19 +535,21 @@ function renderMissingDocsChart(data) {
 // 6. LISTE / RECHERCHE COLLABORATEURS
 // ============================================================================
 
-async function loadEmployees() {
+async function loadEmployees(forceReload = false) {
   lastEmployeesLoad = Date.now();
   hideApiError();
   showLoader();
   try {
-    state.employees = await apiGet('getEmployees');
-    state.filteredEmployees = state.employees;
-    populateFilterOptions(state.employees);
-    initFilters();
-    restoreSearchState();
+    if (!state.employees.length || forceReload) {
+      state.employees = await apiGet('getEmployees');
+      state.filteredEmployees = state.employees;
+      populateFilterOptions(state.employees);
+      initFilters();
+      restoreSearchState();
+    }
   } catch (err) {
     showToast(err.message, 'error');
-    showApiError('Impossible de charger la liste des collaborateurs. Vérifiez le déploiement backend.');
+    showApiError('Impossible de charger la liste des collaborateurs : ' + err.message);
     state.employees = [];
     state.filteredEmployees = [];
     populateFilterOptions([]);
@@ -1054,6 +1135,11 @@ document.addEventListener('DOMContentLoaded', () => {
   if (API_URL.includes('REMPLACER_PAR_URL_DU_WEB_APP')) {
     showToast('Configurez API_URL dans script.js avant utilisation (voir README.md).', 'error');
   }
+
+  // Vérifie tout de suite si l'API répond, avant même la connexion.
+  // Si le déploiement est cassé, l'utilisateur voit un message clair
+  // en haut de la page plutôt qu'un échec silencieux plus tard.
+  checkApiHealth();
 
   // attache les handlers généraux
   initNavigation();

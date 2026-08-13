@@ -11,6 +11,7 @@
  *    GET  ?action=getEmployees                -> liste résumée des collaborateurs
  *    GET  ?action=getEmployee&matricule=...    -> fiche complète d'un collaborateur
  *    GET  ?action=getDashboard                 -> statistiques globales
+ *    GET  ?action=getAppData                   -> tableau de bord + liste résumé des collaborateurs
  *    POST { action: "updateScan" }             -> met à jour AG / AH / AI
  *    POST { action: "updateScan2" }            -> met à jour AM / AN / AO
  *    POST { action: "updateInventory" }        -> met à jour AF
@@ -40,27 +41,25 @@ const FIELDS = {
   RATTACHEMENT: 5,            // E
   // Documents de F à AE (colonnes 6 à 31)
   // INVENTAIRE: AF (32)
-  INVENTAIRE: 32,             // AF
-  // SCAN: AG (33)
-  SCAN: 33,                   // AG
-  COMMENTAIRE_SCAN: 34,       // AH
-  DATE_SCAN: 35,              // AI
-  // COMPLETUDE: AJ (36)
-  COMPLETUDE: 36,             // AJ
-  COMMENTAIRE_COMPLETUDE: 37, // AK
-  DATE_COMPLETUDE: 38,        // AL
-  // SCAN2: AM (39)
-  SCAN2: 39,                  // AM
-  COMMENTAIRE_SCAN2: 40,      // AN
-  DATE_SCAN2: 41              // AO
+  // NOTE: colonnes réordonnées dans la feuille : INVENTAIRE maintenant en AL (38)
+  INVENTAIRE: 38,             // AL
+  // SCAN: AM (39)
+  SCAN: 39,                   // AM
+  COMMENTAIRE_SCAN: 40,       // AN
+  DATE_SCAN: 41,              // AO
+  // COMPLETUDE: AP (42)
+  COMPLETUDE: 42,             // AP
+  COMMENTAIRE_COMPLETUDE: 43, // AQ
+  DATE_COMPLETUDE: 44,        // AR
+  // SCAN2: AS (45)
+  SCAN2: 45,                  // AS
+  COMMENTAIRE_SCAN2: 46,      // AT
+  DATE_SCAN2: 47              // AU
 };
 
-// NOUVELLES COLONNES AJOUTÉES (AP à AU)
+// NOTE: les colonnes AP-AU sont maintenant utilisées pour complétude/scan2
 const EXTRA_FIELDS = {
-  AUTORISATION_IMAGE: 42,     // AP
-  RENOUVELLEMENT_PE: 43,      // AQ
-  CONFIRMATION_PE: 44,        // AR
-  // Les colonnes AS, AT, AU peuvent être utilisées pour d'autres données
+  // réservées si besoin — actuellement mappées dans `FIELDS` ci-dessus
 };
 
 const DATA_END_COL = 47; // Jusqu'à AU (colonne 47)
@@ -122,6 +121,9 @@ function doGet(e) {
 
       case 'getDashboard':
         return jsonResponse({ success: true, data: getDashboard() });
+
+      case 'getAppData':
+        return jsonResponse({ success: true, data: getAppData() });
 
       case 'ping':
         return jsonResponse({ success: true, message: 'API opérationnelle' });
@@ -419,6 +421,113 @@ function buildPoleStats(values) {
     }));
 }
 
+function buildDashboardData(values) {
+  let complete = 0, incomplete = 0, scansDone = 0, scans2Done = 0, inventoriesDone = 0;
+  let completeDocCells = 0;
+  let applicableDocCells = 0;
+  const missingFrequency = {};
+  DOCUMENTS.forEach(doc => { missingFrequency[doc.key] = 0; });
+
+  values.forEach(row => {
+    if (row[FIELDS.SCAN - 1] === true) scansDone++;
+    if (row[FIELDS.SCAN2 - 1] === true) scans2Done++;
+    if (String(row[FIELDS.INVENTAIRE - 1]).trim().toUpperCase() === 'OK') inventoriesDone++;
+
+    const status = row[FIELDS.COMPLETUDE - 1] || computeCompleteness(row);
+    if (status === 'COMPLET') complete++; else incomplete++;
+
+    DOCUMENTS.forEach(doc => {
+      const raw = row[doc.col - 1];
+      const { status: docStatus } = computeDocStatus(raw);
+      if (docStatus === 'na') {
+        return;
+      }
+      applicableDocCells++;
+      if (docStatus === 'complete') {
+        completeDocCells++;
+      } else {
+        missingFrequency[doc.key]++;
+      }
+    });
+  });
+
+  const missingDocsFrequency = DOCUMENTS
+    .map(doc => ({ key: doc.key, label: doc.label, count: missingFrequency[doc.key] }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    totalEmployees: values.length,
+    complete: complete,
+    incomplete: incomplete,
+    scansDone: scansDone,
+    scans2Done: scans2Done,
+    inventoriesDone: inventoriesDone,
+    completionPercentage: applicableDocCells > 0 ? Math.round((completeDocCells / applicableDocCells) * 100) : 0,
+    missingDocsFrequency: missingDocsFrequency,
+    poles: buildPoleStats(values)
+  };
+}
+
+function getAppData() {
+  const sheet = getSheet();
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= CONFIG.HEADER_ROW) {
+    return {
+      dashboard: {
+        totalEmployees: 0,
+        complete: 0,
+        incomplete: 0,
+        scansDone: 0,
+        scans2Done: 0,
+        inventoriesDone: 0,
+        completionPercentage: 0,
+        missingDocsFrequency: [],
+        poles: []
+      },
+      employees: []
+    };
+  }
+
+  const values = sheet
+    .getRange(CONFIG.HEADER_ROW + 1, 1, lastRow - CONFIG.HEADER_ROW, DATA_END_COL)
+    .getValues()
+    .filter(row => String(row[FIELDS.MATRICULE - 1]).trim() !== '');
+
+  return {
+    dashboard: buildDashboardData(values),
+    employees: values.map(row => ({
+      matricule: row[FIELDS.MATRICULE - 1],
+      nomPrenoms: row[FIELDS.NOM_PRENOMS - 1],
+      fonction: row[FIELDS.FONCTION - 1],
+      rattachement: row[FIELDS.RATTACHEMENT - 1],
+      completude: getEmployeeCompleteness(row),
+      scan: row[FIELDS.SCAN - 1] === true,
+      inventaire: row[FIELDS.INVENTAIRE - 1] || '',
+      scan2: row[FIELDS.SCAN2 - 1] === true
+    }))
+  };
+}
+
+function getDashboard() {
+  const sheet = getSheet();
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= CONFIG.HEADER_ROW) {
+    return {
+      totalEmployees: 0, complete: 0, incomplete: 0,
+      scansDone: 0, scans2Done: 0, inventoriesDone: 0, completionPercentage: 0,
+      missingDocsFrequency: [],
+      poles: []
+    };
+  }
+
+  const values = sheet
+    .getRange(CONFIG.HEADER_ROW + 1, 1, lastRow - CONFIG.HEADER_ROW, DATA_END_COL)
+    .getValues()
+    .filter(row => String(row[FIELDS.MATRICULE - 1]).trim() !== '');
+
+  return buildDashboardData(values);
+}
+
 // ============================================================================
 // 5. ROUTES — LECTURE
 // ============================================================================
@@ -469,75 +578,6 @@ function getEmployee(matricule) {
 /**
  * Calcule les statistiques globales pour le tableau de bord.
  */
-function getDashboard() {
-  const sheet = getSheet();
-  const lastRow = sheet.getLastRow();
-  if (lastRow <= CONFIG.HEADER_ROW) {
-    return {
-      totalEmployees: 0, complete: 0, incomplete: 0,
-      scansDone: 0, scans2Done: 0, inventoriesDone: 0, completionPercentage: 0,
-      missingDocsFrequency: [],
-      poles: []
-    };
-  }
-
-  const values = sheet
-    .getRange(CONFIG.HEADER_ROW + 1, 1, lastRow - CONFIG.HEADER_ROW, DATA_END_COL)
-    .getValues()
-    .filter(row => String(row[FIELDS.MATRICULE - 1]).trim() !== '');
-
-  let complete = 0, incomplete = 0, scansDone = 0, scans2Done = 0, inventoriesDone = 0;
-  let completeDocCells = 0;
-  let applicableDocCells = 0;
-  const missingFrequency = {}; // key -> count
-  DOCUMENTS.forEach(doc => { missingFrequency[doc.key] = 0; });
-
-  values.forEach(row => {
-    if (row[FIELDS.SCAN - 1] === true) scansDone++;
-    if (row[FIELDS.SCAN2 - 1] === true) scans2Done++;
-    if (String(row[FIELDS.INVENTAIRE - 1]).trim().toUpperCase() === 'OK') inventoriesDone++;
-
-    const status = row[FIELDS.COMPLETUDE - 1] || computeCompleteness(row);
-    if (status === 'COMPLET') complete++; else incomplete++;
-
-    DOCUMENTS.forEach(doc => {
-      const raw = row[doc.col - 1];
-      const { status: docStatus } = computeDocStatus(raw);
-      // Exclure les N/A du calcul
-      if (docStatus === 'na') {
-        return;
-      }
-      // Compter toutes les cellules sauf N/A (vide, X, CX, numeric, incorrect)
-      applicableDocCells++;
-      
-      if (docStatus === 'complete') {
-        completeDocCells++;
-      } else {
-        missingFrequency[doc.key]++;
-      }
-    });
-  });
-
-  const total = values.length;
-  const missingDocsFrequency = DOCUMENTS
-    .map(doc => ({ key: doc.key, label: doc.label, count: missingFrequency[doc.key] }))
-    .sort((a, b) => b.count - a.count);
-
-  const poles = buildPoleStats(values);
-
-  return {
-    totalEmployees: total,
-    complete: complete,
-    incomplete: incomplete,
-    scansDone: scansDone,
-    scans2Done: scans2Done,
-    inventoriesDone: inventoriesDone,
-    completionPercentage: applicableDocCells > 0 ? Math.round((completeDocCells / applicableDocCells) * 100) : 0,
-    missingDocsFrequency: missingDocsFrequency,
-    poles: poles
-  };
-}
-
 // ============================================================================
 // 6. ROUTES — ÉCRITURE
 // ============================================================================
